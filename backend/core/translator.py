@@ -132,6 +132,6 @@ class SubtitleTranslator:
         RULES:
         1. Keep TIMESTAMPS and INDEX NUMBERS exactly as provided.
         2. Preserve SRT structure: [Index]\\n[Time] --> [Time]\\n[Text]\\n\\n
-        3. Translate only the text content. Don't add the name of the people talking... focus only on the translation.
+        3. Translate only the text content. Don't add the name of the people talking... focus only on the translation. And don't translate the names.
         4. Do not include any explanations or markdown.
         """
