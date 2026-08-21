@@ -1,12 +1,12 @@
+# main.py — FastAPI app + PipelineOrchestrator: scan, process, SSE events. Exports: app.
+
 import logging
-import os
 import time
 import asyncio
-import json
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI, BackgroundTasks, Query, Request
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -124,7 +124,7 @@ class PipelineOrchestrator:
         try:
             # STEP 1: CONTEXT
             event_manager.emit(fid, "processing", 5, f"{p} Step 1/5: Analyzing context...")
-            context = self.translator.get_context_profile(video.name)
+            context = await asyncio.to_thread(self.translator.get_context_profile, video.name)
 
             # STEP 2: SOURCE (Transcription or SRT Import)
             srt_content = ""
@@ -153,14 +153,15 @@ class PipelineOrchestrator:
                 
                 # UPDATED: We pass both the model_size and the context.
                 # The transcriber will check if 'opts.transcriptionEngine' is already loaded.
-                srt_content = self.transcriber.transcribe(
-                    video_path=video.path, 
-                    file_id=fid, 
+                srt_content = await asyncio.to_thread(
+                    self.transcriber.transcribe,
+                    video_path=video.path,
+                    file_id=fid,
                     on_progress=event_manager.emit,
                     current_file=index + 1,
                     total_files=total,
                     model_size=opts.transcriptionEngine,
-                    context_prompt=context 
+                    context_prompt=context
                 )
 
             # STEP 3: SYNC
@@ -171,7 +172,8 @@ class PipelineOrchestrator:
             translated_map = {}
             for lang_code in video.out:
                 event_manager.emit(fid, "processing", 50, f"{p} Translating to {lang_code}...")
-                translation = self.translator.refine_and_translate(
+                translation = await asyncio.to_thread(
+                    self.translator.refine_and_translate,
                     srt_content=srt_content,
                     target_lang=lang_code,
                     file_id=fid,
@@ -194,7 +196,8 @@ class PipelineOrchestrator:
             # STEP 5: MUXING
             if opts.muxIntoMkv:
                 event_manager.emit(fid, "processing", 90, f"{p} Muxing into MKV...")
-                self.muxer.mux(
+                await asyncio.to_thread(
+                    self.muxer.mux,
                     video_path=video.path,
                     srts=translated_map,
                     current_file=index + 1,
@@ -219,11 +222,14 @@ class PipelineOrchestrator:
 
 # --- LIFESPAN ---
 orchestrator = None
+_jobs: Set[asyncio.Task] = set()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global orchestrator
     orchestrator = PipelineOrchestrator()
+    # The pipeline runs off-loop; EventManager needs this loop to hand SSE data back safely.
+    event_manager.bind_loop(asyncio.get_running_loop())
     yield
 
 # --- API ---
@@ -238,16 +244,32 @@ app.add_middleware(
 
 @app.get("/api/scan")
 async def scan(target_path: str = Query("/data")):
-    return {"files": orchestrator.get_files(target_path)}
+    # scanner.scan() shells out to ffprobe per file; keep it off the event loop.
+    files = await asyncio.to_thread(orchestrator.get_files, target_path)
+    return {"files": files}
 
 @app.post("/api/process")
-async def process(request: ProcessRequest, background_tasks: BackgroundTasks):
-    background_tasks.add_task(orchestrator.run_batch, request.videos, request.globalOptions)
+async def process(request: ProcessRequest):
+    # NOT BackgroundTasks: uvicorn withholds the response until those finish, which would hang
+    # this POST for the whole batch. create_task returns to the client immediately.
+    task = asyncio.create_task(orchestrator.run_batch(request.videos, request.globalOptions))
+    _jobs.add(task)
+    task.add_done_callback(_jobs.discard)
+    task.add_done_callback(_log_job_result)
     return {"status": "accepted", "count": len(request.videos)}
 
 @app.get("/api/events/{file_id:path}")
 async def events(file_id: str):
     return StreamingResponse(event_manager.subscribe(file_id), media_type="text/event-stream")
+
+def _log_job_result(task: asyncio.Task):
+    if task.cancelled():
+        logger.warning("Batch task was cancelled")
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error(f"Batch task crashed: {exc!r}", exc_info=exc)
+
 
 @app.get("/health")
 async def health():

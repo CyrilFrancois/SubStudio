@@ -1,3 +1,5 @@
+# muxer.py — VideoMuxer: injects translated SRTs into MKV with ISO 639-2 tags. Exports: VideoMuxer.
+
 import os
 import re
 import logging
@@ -127,17 +129,23 @@ class VideoMuxer:
             for _, srt_path in tmp_srt_paths:
                 cmd += ["-i", str(srt_path)]
 
-            # Mapping Logic
+            # Mapping Logic. The '?' makes each map optional: a video with no audio track
+            # (or no subtitles) would otherwise abort with "matches no streams".
             if strip_existing:
-                cmd += ["-map", "0:v", "-map", "0:a"]
+                cmd += ["-map", "0:v?", "-map", "0:a?"]
             else:
-                cmd += ["-map", "0"]
+                cmd += ["-map", "0:v?", "-map", "0:a?", "-map", "0:s?", "-map", "0:t?"]
 
             for i in range(len(tmp_srt_paths)):
                 cmd += ["-map", f"{i + 1}:0"]
 
-            # Codecs: Copy video/audio, encode subs to srt/text for MKV
-            cmd += ["-c:v", "copy", "-c:a", "copy", "-c:s", "srt"]
+            # Existing subtitle streams are COPIED, never re-encoded: image-based tracks
+            # (PGS/VobSub, i.e. most BluRay remuxes) cannot be converted to text and ffmpeg
+            # aborts the whole mux. Only the SRTs we just generated are encoded as srt.
+            cmd += ["-c:v", "copy", "-c:a", "copy", "-c:s", "copy"]
+            for i in range(len(tmp_srt_paths)):
+                out_stream_idx = existing_sub_count + i
+                cmd += [f"-c:s:{out_stream_idx}", "srt"]
 
             # Metadata Assignment
             for index, (lang_code, _) in enumerate(tmp_srt_paths):
