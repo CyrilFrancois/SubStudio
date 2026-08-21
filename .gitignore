@@ -1,4 +1,17 @@
+# Secrets and personal runbooks
 .env
+TODOCYRIL.md
 
-#Ignore the actual media data
+# Media data
 data/
+
+# Node
+node_modules/
+.next/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# TypeScript incremental build cache
+*.tsbuildinfo
