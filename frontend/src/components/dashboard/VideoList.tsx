@@ -1,7 +1,8 @@
+// VideoList.tsx — Dashboard: recursive folder/video tree with selection. Exports: default VideoList.
 "use client";
 
 import React, { useState, useMemo } from 'react';
-import { useStudio } from '@/app/page';
+import { useStudio } from '@/lib/studio-context';
 import VideoCard from './VideoCard';
 import { Ghost, ChevronRight, ChevronDown, Folder, Loader2 } from 'lucide-react';
 import { VideoFile } from '@/lib/types';

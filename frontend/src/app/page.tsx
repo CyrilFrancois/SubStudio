@@ -1,25 +1,17 @@
+// page.tsx — Studio dashboard root: owns StudioState, SSE subscriptions and batch dispatch. Exports: default DashboardPage.
 "use client";
 
-import React, { useState, useCallback, useEffect, useMemo, useRef, createContext, useContext } from 'react';
-import Sidebar from '@/components/layout/Sidebar'; 
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import Sidebar from '@/components/layout/Sidebar';
 import GlobalProgress from '@/components/dashboard/GlobalProgress';
 import VideoList from '@/components/dashboard/VideoList';
 import { api } from '@/lib/api';
-import { VideoFile, GlobalSettings, StudioState } from '@/lib/types';
+import { VideoFile, GlobalSettings, StudioState, ProcessingStatus } from '@/lib/types';
+import { StudioContext, useStudio } from '@/lib/studio-context';
 import { createSSEConnection, SSEEvent } from '@/lib/sse';
 import { Terminal, Bug, X } from 'lucide-react';
 
-// --- CONTEXT ---
-export const StudioContext = createContext<{
-  state: StudioState;
-  actions: any;
-} | null>(null);
-
-export const useStudio = () => {
-  const context = useContext(StudioContext);
-  if (!context) throw new Error("useStudio must be used within StudioContext");
-  return context;
-};
+const TERMINAL_LOG_LIMIT = 400;
 
 // --- DEBUGGER ---
 function AppStatusDebugger() {
@@ -35,7 +27,12 @@ function AppStatusDebugger() {
   }, []);
 
   if (!isVisible) return (
-    <button onClick={() => setIsVisible(true)} className="fixed bottom-2 right-2 w-6 h-6 opacity-20 hover:opacity-100 z-[9999] flex items-center justify-center text-white bg-white/10 rounded-full transition-all">
+    <button
+      onClick={() => setIsVisible(true)}
+      aria-label="Open debug panel"
+      title="Open debug panel (Ctrl+Shift+D)"
+      className="fixed bottom-2 right-2 w-6 h-6 opacity-20 hover:opacity-100 z-[9999] flex items-center justify-center text-white bg-white/10 rounded-full transition-all"
+    >
       <Bug size={12} />
     </button>
   );
@@ -46,7 +43,9 @@ function AppStatusDebugger() {
         <div className="flex items-center gap-2 text-indigo-400 font-mono text-[10px] font-bold tracking-widest">
           <Terminal size={14} /> SYSTEM_DEBUG_STDOUT
         </div>
-        <button onClick={() => setIsVisible(false)} className="text-gray-500 hover:text-white p-1"><X size={18} /></button>
+        <button onClick={() => setIsVisible(false)} aria-label="Close debug panel" title="Close" className="text-gray-500 hover:text-white p-1">
+          <X size={18} />
+        </button>
       </div>
       <div className="flex-1 overflow-auto p-6 custom-scrollbar">
         <pre className="text-[10px] font-mono text-emerald-500/90 whitespace-pre-wrap">
@@ -79,6 +78,7 @@ export default function DashboardPage() {
   const [mounted, setMounted] = useState(false);
   const activeListeners = useRef<Record<string, EventSource>>({});
   const hasInitialScanned = useRef(false);
+  const scanInFlight = useRef(false);
 
   const [state, setState] = useState<StudioState>({
     items: [],
@@ -88,13 +88,13 @@ export default function DashboardPage() {
     currentPath: "/data",
     settings: {
       sourceLang: ['auto'],
-      targetLanguages: ['fr'], 
-      workflowMode: 'whisper', // 'hybrid', 'whisper', 
+      targetLanguages: ['fr'],
+      workflowMode: 'whisper',
       modelSize: 'medium',
       autoGenerate: true,
       shouldMux: true,
       shouldRemoveOriginal: false,
-      stripExistingSubs: false 
+      stripExistingSubs: false
     }
   });
 
@@ -112,57 +112,82 @@ export default function DashboardPage() {
     });
   }, []);
 
+  const appendLog = useCallback((fileId: string, line: string) => {
+    setState(prev => {
+      const next = [...(prev.logs[fileId] || []), line];
+      return {
+        ...prev,
+        logs: {
+          ...prev.logs,
+          [fileId]: next.length > TERMINAL_LOG_LIMIT ? next.slice(-TERMINAL_LOG_LIMIT) : next
+        }
+      };
+    });
+  }, []);
+
   // 2. STABLE SCAN ACTION
   const performScan = useCallback(async (path: string) => {
-    if (state.isScanning) return; 
-
+    // Guard lives in a ref, not in state: a setState updater runs when React processes the
+    // update, not at the call site, so reading the flag back from it races. Keeping it out of
+    // state also keeps this callback's identity stable, so the mount effect fires once.
+    if (scanInFlight.current) return;
+    scanInFlight.current = true;
     setState(prev => ({ ...prev, isScanning: true }));
+
     try {
       const data = await api.scanFolder(path);
       setState(prev => {
-        const process = (files: any[]): VideoFile[] => files.map(f => ({
-          ...f, 
-          id: f.filePath, 
-          status: f.is_directory ? 'folder' : 'idle', 
+        const hydrate = (files: any[]): VideoFile[] => files.map(f => ({
+          ...f,
+          id: f.filePath,
+          status: (f.is_directory ? 'folder' : 'idle') as ProcessingStatus,
           progress: 0,
           sourceLang: prev.settings.sourceLang,
           targetLanguages: prev.settings.targetLanguages,
           workflowMode: prev.settings.workflowMode,
           stripExistingSubs: prev.settings.stripExistingSubs,
-          selectedSrtPath: null, // Initialized as null
-          children: f.is_directory ? process(f.children || []) : null
+          selectedSrtPath: f.subtitleInfo?.externalPath ?? null,
+          children: f.is_directory ? hydrate(f.children || []) : null
         }));
-        return { ...prev, items: process(data.files || []), isScanning: false };
+        return { ...prev, items: hydrate(data.files || []), isScanning: false };
       });
     } catch (e) {
       console.error("Scan Failed:", e);
       setState(prev => ({ ...prev, isScanning: false }));
+    } finally {
+      scanInFlight.current = false;
     }
-  }, [state.isScanning]);
+  }, []);
 
   // 3. SSE MANAGEMENT
   const subscribeToUpdates = useCallback((fileId: string) => {
     if (activeListeners.current[fileId]) activeListeners.current[fileId].close();
 
-    // Ensure we URL-encode the fileId to avoid breaks in the connection
-    const encodedId = encodeURIComponent(fileId);
-    
-    const es = createSSEConnection(encodedId, (data: SSEEvent) => {
+    // Pass the RAW path. createSSEConnection does the single encodeURIComponent; encoding here
+    // as well produced %252F..., which the backend decodes to a key no emitter ever writes to,
+    // so the stream stayed silent and every card froze at 5%.
+    const es = createSSEConnection(fileId, (data: SSEEvent) => {
+      if (data.type === 'log') {
+        appendLog(fileId, data.message);
+        return;
+      }
       if (data.type === 'status') {
         updateVideoInList(fileId, {
-          status: data.status,
-          progress: data.progress,
-          statusText: data.message 
+          status: (data.status || 'processing') as ProcessingStatus,
+          progress: data.progress ?? 0,
+          statusText: data.message
         });
-        if (['done', 'error', 'cancelled'].includes(data.status)) {
+        if (['done', 'error', 'cancelled'].includes(data.status || '')) {
           es.close();
           delete activeListeners.current[fileId];
         }
       }
-    }, () => delete activeListeners.current[fileId]);
-    
+    }, () => {
+      delete activeListeners.current[fileId];
+    });
+
     activeListeners.current[fileId] = es;
-  }, [updateVideoInList]);
+  }, [updateVideoInList, appendLog]);
 
   // 4. COMBINED ACTIONS
   const actions = useMemo(() => ({
@@ -170,7 +195,7 @@ export default function DashboardPage() {
       setState(prev => ({ ...prev, currentPath: path }));
       performScan(path);
     },
-    
+
     setSettings: (updates: Partial<GlobalSettings>) => {
       setState(prev => {
         const nextSettings = { ...prev.settings, ...updates };
@@ -191,13 +216,13 @@ export default function DashboardPage() {
 
     updateVideoData: (id: string, updates: Partial<VideoFile>) => updateVideoInList(id, updates),
 
-    toggleSelection: (id: string, isDir: boolean, children?: any[]) => {
+    toggleSelection: (id: string, isDir: boolean, children?: VideoFile[]) => {
       setState(prev => {
         const next = new Set(prev.selectedIds);
         const isAdding = !next.has(id);
-        const apply = (tId: string, c?: any[]) => {
-          isAdding ? next.add(tId) : next.delete(tId);
-          if (c) c.forEach(child => apply(child.filePath, child.children));
+        const apply = (targetId: string, kids?: VideoFile[] | null) => {
+          if (isAdding) next.add(targetId); else next.delete(targetId);
+          if (kids) kids.forEach(child => apply(child.filePath, child.children));
         };
         apply(id, children);
         return { ...prev, selectedIds: next };
@@ -209,12 +234,12 @@ export default function DashboardPage() {
     process: async (targetVideos: VideoFile[]) => {
       const videosToStart = targetVideos.filter(v => v.status !== 'processing');
       if (videosToStart.length === 0) return;
-      
+
       const payload = {
         videos: videosToStart.map(v => ({
           name: v.fileName,
           path: v.filePath,
-          selectedSrtPath: v.selectedSrtPath || null, // SENDING CUSTOM SRT
+          selectedSrtPath: v.selectedSrtPath || null,
           src: v.sourceLang?.[0] || state.settings.sourceLang[0],
           out: v.targetLanguages || state.settings.targetLanguages,
           workflowMode: v.workflowMode || state.settings.workflowMode,
@@ -229,7 +254,6 @@ export default function DashboardPage() {
         }
       };
 
-      // Set UI state immediately
       videosToStart.forEach(v => {
         updateVideoInList(v.id, { status: 'processing', progress: 5, statusText: 'Initializing...' });
         subscribeToUpdates(v.filePath);
@@ -250,14 +274,15 @@ export default function DashboardPage() {
   useEffect(() => {
     setMounted(true);
     if (!hasInitialScanned.current) {
-      performScan("/data"); 
       hasInitialScanned.current = true;
+      performScan("/data");
     }
 
+    const listeners = activeListeners.current;
     return () => {
-      Object.values(activeListeners.current).forEach(es => es.close());
+      Object.values(listeners).forEach(es => es.close());
     };
-  }, [performScan]); 
+  }, [performScan]);
 
   if (!mounted) return <div className="h-screen w-full bg-[#0a0a0a]" />;
 

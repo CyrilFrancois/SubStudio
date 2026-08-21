@@ -1,7 +1,8 @@
+// GlobalProgress.tsx — Dashboard: batch counter, progress bar and live execution terminal. Exports: default GlobalProgress.
 "use client";
 
 import React, { useEffect, useRef, useMemo } from 'react';
-import { useStudio } from '@/app/page';
+import { useStudio } from '@/lib/studio-context';
 import { Activity, Terminal, ChevronRight, Cpu, Zap, CheckCircle2, PartyPopper } from 'lucide-react';
 import { VideoFile } from '@/lib/types';
 

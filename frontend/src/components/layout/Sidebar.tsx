@@ -1,7 +1,8 @@
+// Sidebar.tsx — Layout: global engine settings, media sync and batch launch. Exports: default Sidebar.
 "use client";
 
 import React, { useMemo } from 'react';
-import { useStudio } from '@/app/page';
+import { useStudio } from '@/lib/studio-context';
 import { 
   Folder, Play, Volume2, Text, Eraser,
   Check, Loader2, ChevronDown, Cpu, Zap, Settings, Lock

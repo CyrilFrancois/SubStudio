@@ -1,3 +1,4 @@
+// layout.tsx — Root HTML shell and metadata. Exports: metadata, default RootLayout.
 import './globals.css';
 
 export const metadata = {

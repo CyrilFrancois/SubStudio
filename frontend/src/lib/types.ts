@@ -1,37 +1,41 @@
-/**
- * Detailed statuses matching the Backend Task Manager events.
- */
-export type ProcessingStatus = 
-  | 'idle' 
-  | 'queued' 
-  | 'contextualizing' 
-  | 'transcribing' 
-  | 'refining' 
-  | 'translating' 
-  | 'muxing' 
-  | 'done' 
-  | 'error' 
-  | 'interrupted' 
-  | 'cancelled' 
+// types.ts — Shared data shapes for scan/process/SSE. Exports: ProcessingStatus, SubtitleInfo, VideoFile, GlobalSettings, StudioState, ScanResponse, ProcessRequest.
+
+/** Values the backend actually puts in the SSE `status` field, plus local-only UI states. */
+export type ProcessingStatus =
+  | 'idle'
+  | 'queued'
+  | 'processing'
+  | 'transcribing'
+  | 'translating'
+  | 'muxing'
+  | 'done'
+  | 'error'
+  | 'cancelled'
   | 'folder';
 
+export type WorkflowMode = 'hybrid' | 'whisper' | 'srt';
+
+/** Mirrors VideoScanner._get_subtitle_meta() in backend/core/scanner.py. */
 export interface SubtitleInfo {
   hasSubtitles: boolean;
-  subType: 'embedded' | 'external' | 'mixed' | null;
-  languages: string[];
-  count: number;
-  srtPath?: string; 
+  subType: 'embedded' | 'external' | 'manual' | null;
+  /** Single code ("eng", "fr") or "auto" when undetermined. */
+  language: string;
+  /** Absolute server-side path to the sidecar file, when subType is external/manual. */
+  externalPath: string | null;
+  /** Language tags of embedded streams found by ffprobe. */
+  embeddedTracks: string[];
 }
 
 export interface VideoFile {
-  id: string; 
+  id: string;
   fileName: string;
   filePath: string;
   extension?: string;
   is_directory: boolean;
-  
+
   subtitleInfo?: SubtitleInfo;
-  
+
   // UI State
   status: ProcessingStatus;
   progress: number;
@@ -40,33 +44,32 @@ export interface VideoFile {
   // Tree Structure
   children?: VideoFile[] | null;
 
-  // Per-file settings (Overrides global settings)
+  // Per-file settings (override the global settings)
   sourceLang?: string[];
   targetLanguages?: string[];
-  workflowMode?: 'hybrid' | 'whisper' | 'srt';
+  workflowMode?: WorkflowMode;
   syncOffset?: number;
-  /** If true, the muxing engine will strip all existing internal subtitle tracks */
-  stripExistingSubs?: boolean; 
+  /** Server-side path of an explicitly chosen SRT; sent to the backend as-is. */
+  selectedSrtPath?: string | null;
+  /** If true, the muxing engine drops all existing internal subtitle tracks. */
+  stripExistingSubs?: boolean;
 }
 
-/**
- * Global configuration state
- */
 export interface GlobalSettings {
   sourceLang: string[];
   targetLanguages: string[];
-  workflowMode: 'hybrid' | 'whisper' | 'srt';
+  workflowMode: WorkflowMode;
   modelSize: 'tiny' | 'base' | 'small' | 'medium' | 'large';
   autoGenerate: boolean;
   shouldMux: boolean;
   shouldRemoveOriginal: boolean;
-  /** Global default for stripping existing subtitles */
-  stripExistingSubs: boolean; 
+  stripExistingSubs: boolean;
 }
 
 export interface StudioState {
   items: VideoFile[];
   selectedIds: Set<string>;
+  /** Keyed by filePath; appended from SSE events of type "log". */
   logs: Record<string, string[]>;
   isScanning: boolean;
   currentPath: string;
@@ -74,24 +77,20 @@ export interface StudioState {
 }
 
 export interface ScanResponse {
-  status: string;
-  currentPath: string;
   files: VideoFile[];
 }
 
-/**
- * Payload sent to POST /api/process
- */
+/** Payload for POST /api/process — matches VideoJob/GlobalOptions in backend/main.py. */
 export interface ProcessRequest {
   videos: Array<{
     name: string;
     path: string;
+    selectedSrtPath: string | null;
     src: string;
     out: string[];
     workflowMode: string;
     syncOffset: number;
-    /** Instructions for the FFmpeg engine on a per-video basis */
-    stripExistingSubs: boolean; 
+    stripExistingSubs: boolean;
   }>;
   globalOptions: {
     transcriptionEngine: string;

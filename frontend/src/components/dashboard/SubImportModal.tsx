@@ -1,3 +1,4 @@
+// SubImportModal.tsx — Dashboard: pick a sidecar SRT beside the video, plus provider lookups. Exports: default SubImportModal.
 "use client";
 
 import React, { useState, useCallback, useMemo } from 'react';
@@ -42,15 +43,15 @@ export default function SubImportModal({ isOpen, onClose, videoName, videoPath, 
     try {
       setIsUploading(true);
       setSelectedFile(file);
-      
-      // We pass the ACTUAL file name to the backend/state, not a renamed version
-      // This ensures the badge hover shows the real file name.
+
+      // Nothing is transferred: there is no upload endpoint. We record the file NAME and
+      // resolve it against the video's own folder, so the backend can open it server-side.
       await onFileSelect(file, file.name, videoPath);
-      
+
       onClose();
     } catch (err) {
-      console.error("Upload failed", err);
-      alert("Failed to upload subtitle file.");
+      console.error("Link failed", err);
+      alert("Could not link that subtitle file.");
       setSelectedFile(null);
     } finally {
       setIsUploading(false);
@@ -89,8 +90,8 @@ export default function SubImportModal({ isOpen, onClose, videoName, videoPath, 
               <FileText className="text-indigo-400" size={18} />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-white uppercase tracking-wider">Manual Import</h3>
-              <p className="text-[10px] text-gray-500 font-medium uppercase">Select custom SRT source</p>
+              <h3 className="text-sm font-bold text-white uppercase tracking-wider">Link a subtitle</h3>
+              <p className="text-[10px] text-gray-500 font-medium uppercase">Choose an SRT from the video&apos;s folder</p>
             </div>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-white/5 rounded-full text-gray-500 hover:text-white">
@@ -103,7 +104,7 @@ export default function SubImportModal({ isOpen, onClose, videoName, videoPath, 
           <div className="bg-white/[0.02] border border-white/5 rounded-xl p-4">
             <div className="flex items-center gap-2 mb-3">
               <AlertCircle size={12} className="text-indigo-500" />
-              <span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest">Selected Source</span>
+              <span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest">Looked up in</span>
             </div>
             <div className="space-y-2">
               <div className="text-[10px] text-gray-500 font-mono truncate">{videoPath}/</div>
@@ -133,9 +134,11 @@ export default function SubImportModal({ isOpen, onClose, videoName, videoPath, 
               <Upload className={`mb-3 transition-transform ${isDragging ? 'translate-y-[-4px] text-indigo-400' : 'text-gray-600'}`} size={32} />
             )}
             <p className="text-sm text-gray-300 font-bold mb-1">
-              {isUploading ? 'Uploading...' : selectedFile ? 'File verified' : 'Drop SRT here'}
+              {isUploading ? 'Linking...' : selectedFile ? 'Linked' : 'Pick the SRT'}
             </p>
-            <p className="text-[10px] text-gray-600 uppercase font-black tracking-widest">or click to browse</p>
+            <p className="text-[10px] text-gray-600 uppercase font-black tracking-widest">
+              It must already sit in the folder shown above
+            </p>
             <input 
               type="file" accept=".srt" disabled={isUploading}
               className="absolute inset-0 opacity-0 cursor-pointer" 

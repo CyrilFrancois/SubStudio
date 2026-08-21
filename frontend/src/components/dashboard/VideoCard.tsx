@@ -1,14 +1,15 @@
+// VideoCard.tsx — Dashboard: one video row with per-file workflow, languages and start action. Exports: default VideoCard.
 "use client";
 
 import React, { useState } from 'react';
-import { useStudio } from '@/app/page';
+import { useStudio } from '@/lib/studio-context';
 import SubImportModal from './SubImportModal';
 import { 
   Check, Loader2, FileText, ChevronDown, Layers, Lock 
 } from 'lucide-react';
-import { ProcessingStatus } from '@/lib/types';
+import { ProcessingStatus, VideoFile } from '@/lib/types';
 
-export default function VideoCard({ video }: { video: any }) {
+export default function VideoCard({ video }: { video: VideoFile }) {
   const { state, actions } = useStudio();
   const [isModalOpen, setIsModalOpen] = useState(false);
 
@@ -21,11 +22,12 @@ export default function VideoCard({ video }: { video: any }) {
   const isSelected = state.selectedIds.has(video.id);
   const isProcessing = !['idle', 'done', 'error', 'folder'].includes(video.status);
   
-  const subInfo = video.subtitleInfo || { 
-    hasSubtitles: false, 
-    subType: null, 
-    externalPath: null, 
-    language: null 
+  const subInfo = video.subtitleInfo || {
+    hasSubtitles: false,
+    subType: null,
+    externalPath: null,
+    language: 'auto',
+    embeddedTracks: []
   };
   
   // Decide if we are currently using Speech Recognition or an SRT source
@@ -55,7 +57,7 @@ export default function VideoCard({ video }: { video: any }) {
   // Helper to get just the filename from a full path for the tooltip
   const getSrtDisplayPath = () => {
     if (!subInfo.externalPath) return 'Embedded Stream';
-    return subInfo.externalPath.split('/').pop();
+    return subInfo.externalPath.split(/[\/]/).pop();
   };
 
   return (
@@ -214,15 +216,18 @@ export default function VideoCard({ video }: { video: any }) {
           : '.' 
         }
         onFileSelect={async (file, realFileName, destinationPath) => {
-          actions.updateVideoData(video.id, { 
+          const serverPath = `${destinationPath}/${realFileName}`;
+          actions.updateVideoData(video.id, {
             workflowMode: 'srt',
             statusText: 'SRT Ready',
-            subtitleInfo: { 
-              hasSubtitles: true, 
-              subType: 'manual', 
-              // This path is used by the backend to find the file
-              externalPath: `${destinationPath}/${realFileName}`,
-              language: 'User Selected'
+            // selectedSrtPath is the field POST /api/process reads; subtitleInfo is display only.
+            selectedSrtPath: serverPath,
+            subtitleInfo: {
+              hasSubtitles: true,
+              subType: 'manual',
+              externalPath: serverPath,
+              language: subInfo.language,
+              embeddedTracks: subInfo.embeddedTracks
             }
           });
         }}
