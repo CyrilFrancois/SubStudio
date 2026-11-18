@@ -2,7 +2,7 @@
 
 SubStudio turns raw video files into multi-lingual, subtitled media without anything leaving your
 machine. Transcription runs locally with Faster-Whisper; only the translation step calls out to
-OpenAI. Everything is orchestrated from a Next.js dashboard with live progress over SSE.
+Google Gemini. Everything is orchestrated from a Next.js dashboard with live progress over SSE.
 
 <p align="center">
   <img src="ressources/screen.png" width="400">
@@ -12,7 +12,7 @@ OpenAI. Everything is orchestrated from a Next.js dashboard with live progress o
 
 * **Local AI transcription** — Faster-Whisper (`tiny` → `large`), CPU-optimised with int8
   quantisation. Word-level timestamps are grouped into subtitle blocks on sentence boundaries.
-* **Context-aware translation** — before translating, the filename is sent to `gpt-4o-mini` to
+* **Context-aware translation** — before translating, the filename is sent to Gemini (`gemini-3.8-flash`) to
   build a "story bible" (title, characters, genders, tone, plot). That profile is fed into every
   translation batch so character names and gendered grammar stay consistent, and is also used as
   Whisper's `initial_prompt` to improve transcription of proper nouns.
@@ -28,7 +28,7 @@ OpenAI. Everything is orchestrated from a Next.js dashboard with live progress o
 
 * **Frontend (Next.js 14):** React dashboard, state in a single `StudioContext`.
 * **Backend (FastAPI):** `PipelineOrchestrator` runs the batch. Every blocking step
-  (Whisper, OpenAI, FFmpeg) is dispatched with `asyncio.to_thread`, so the event loop stays free
+  (Whisper, Gemini, FFmpeg) is dispatched with `asyncio.to_thread`, so the event loop stays free
   to serve the SSE stream and `/api/scan` while a job runs.
 * **Shared volume:** the backend mounts your media folder at `/data`. Processing is in-place —
   outputs are written next to the source file, not to a separate directory.
@@ -163,7 +163,7 @@ subtitle tracks from the output instead of carrying them over.
 Copy `.env.example` to `.env` and fill it in:
 
 ```env
-OPENAI_API_KEY=sk-proj-...              # required, used for translation
+GEMINI_API_KEY=...                     # required, used for translation
 NEXT_PUBLIC_MEDIA_PATH=C:/Videos        # your media folder, mounted as /data
 NEXT_PUBLIC_API_URL=http://localhost:8000
 NEXT_PUBLIC_LANGUAGES='{"English":"en", "French":"fr"}'
@@ -281,5 +281,5 @@ the API but has no UI control yet.
 
 * **Faster-Whisper** — Systran's optimised Whisper implementation
 * **FFmpeg** — multimedia framework
-* **OpenAI** — `gpt-4o-mini` for translation
+* **Google Gemini** — `gemini-3.8-flash` for translation
 * **Next.js** — React framework

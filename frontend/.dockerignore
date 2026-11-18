@@ -1,0 +1,5 @@
+# The image runs its own npm install; host node_modules (with symlinks Docker on Windows cannot
+# checksum) and build output must never enter the build context or overwrite it via COPY . .
+node_modules
+.next
+*.tsbuildinfo

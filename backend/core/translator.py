@@ -1,15 +1,50 @@
+# translator.py — SubtitleTranslator: story-bible context + batched SRT translation. Exports: SubtitleTranslator.
+
 import os
 import logging
 import time
-from openai import OpenAI
-from typing import Callable, Any, List
+import httpx
+from typing import Callable, Any, List, Optional
 
 logger = logging.getLogger("SubStudio.Translator")
 
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+
 class SubtitleTranslator:
     def __init__(self, api_key: str = None):
-        self.client = OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
-        self.model = "gpt-4o-mini"  # High intelligence, low latency
+        self.api_key = api_key or os.getenv("GEMINI_API_KEY", "")
+        # Benchmarked 2026-11-08 on a 3-block SRT: ~2 s at thinkingLevel "low" vs ~5.5 s at the default.
+        # thinkingLevel is a Gemini 3.x field — a 2.5 model override would need thinkingBudget instead.
+        self.model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+        self.http = httpx.Client(timeout=120)
+        if not self.api_key:
+            logger.error("GEMINI_API_KEY is not set — every translation request will fail.")
+
+    def _generate(self, user_content: str, temperature: float, system_prompt: str = "") -> str:
+        body = {
+            "contents": [{"role": "user", "parts": [{"text": user_content}]}],
+            "generationConfig": {"temperature": temperature, "thinkingConfig": {"thinkingLevel": "low"}},
+        }
+        if system_prompt:
+            body["systemInstruction"] = {"parts": [{"text": system_prompt}]}
+        r = self.http.post(GEMINI_URL.format(model=self.model), json=body,
+                           headers={"x-goog-api-key": self.api_key})
+        if r.status_code != 200:
+            raise RuntimeError(f"Gemini HTTP {r.status_code}: {r.text[:300]}")
+        data = r.json()
+        candidates = data.get("candidates") or []
+        if not candidates:
+            raise RuntimeError(f"Gemini returned no candidate (blocked?): {data.get('promptFeedback')}")
+        # MAX_TOKENS / SAFETY / RECITATION mean a partial or empty text: accepting it would ship a
+        # silently truncated subtitle file, so it is an error, not a result.
+        reason = candidates[0].get("finishReason")
+        if reason != "STOP":
+            raise RuntimeError(f"Gemini stopped with finishReason={reason}")
+        parts = candidates[0].get("content", {}).get("parts", [])
+        text = "".join(p.get("text", "") for p in parts if not p.get("thought")).strip()
+        if not text:
+            raise RuntimeError("Gemini returned an empty text")
+        return text
 
     def get_context_profile(self, filename: str) -> str:
         """
@@ -27,12 +62,7 @@ class SubtitleTranslator:
         If unknown, infer from keywords."""
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3
-            )
-            return response.choices[0].message.content.strip()
+            return self._generate(prompt, temperature=0.3)
         except Exception as e:
             logger.error(f"   ❌ Context Research failed: {e}")
             return "Neutral media content. No specific character data."
@@ -95,24 +125,16 @@ class SubtitleTranslator:
         return "\n\n".join(results)
 
     def _call_llm(self, system_prompt: str, user_content: str, retries=2) -> str:
-        """Wrapper for OpenAI call with specific SRT formatting enforcement."""
+        """Wrapper for the Gemini call with specific SRT formatting enforcement."""
         for attempt in range(retries + 1):
             try:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_content}
-                    ],
-                    temperature=0.2 
-                )
-                content = response.choices[0].message.content.strip()
+                content = self._generate(user_content, temperature=0.2, system_prompt=system_prompt)
                 # Clean up AI formatting artifacts
                 return content.replace("```srt", "").replace("```", "").strip()
             except Exception as e:
                 if attempt == retries: raise e
+                logger.warning(f"Gemini call failed (attempt {attempt + 1}/{retries + 1}): {e}")
                 time.sleep(2)
-        return user_content
 
     def _build_system_prompt(self, lang: str, context: str, is_whisper: bool) -> str:
         whisper_instruction = ""
