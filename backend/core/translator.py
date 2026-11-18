@@ -6,6 +6,8 @@ import time
 import httpx
 from typing import Callable, Any, List, Optional
 
+from .jobs import JobHandle, JobAborted
+
 logger = logging.getLogger("SubStudio.Translator")
 
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
@@ -73,7 +75,7 @@ class SubtitleTranslator:
         target_lang: str, 
         file_id: str, 
         on_progress: Callable, 
-        task_manager: Any,
+        job: Optional[JobHandle],
         context_profile: str,
         current_file: int,
         total_files: int,
@@ -94,9 +96,9 @@ class SubtitleTranslator:
         last_logged_pct = -1
 
         for i in range(0, len(blocks), batch_size):
-            if task_manager.is_aborted:
-                logger.warning(f"   🛑 {prefix} Translation aborted by user.")
-                return ""
+            if job and job.is_aborted:
+                logger.warning(f"🛑 {prefix} Translation aborted by user.")
+                raise JobAborted(job.file_id)
 
             batch = blocks[i : i + batch_size]
             batch_text = "\n\n".join(batch)

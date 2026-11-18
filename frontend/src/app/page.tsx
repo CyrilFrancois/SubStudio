@@ -267,6 +267,25 @@ export default function DashboardPage() {
           updateVideoInList(v.id, { status: 'error', statusText: 'Failed to connect to server' });
         });
       }
+    },
+
+    cancel: async (video: VideoFile) => {
+      updateVideoInList(video.id, { statusText: 'Cancelling...' });
+      try {
+        await api.cancelJob(video.filePath);
+      } catch (err) {
+        console.error("Cancel failed:", err);
+        updateVideoInList(video.id, { statusText: 'Cancel failed' });
+      }
+      // The backend confirms with a "cancelled" SSE frame; the card settles when it arrives.
+    },
+
+    abortAll: async () => {
+      try {
+        await api.abortAll();
+      } catch (err) {
+        console.error("Abort failed:", err);
+      }
     }
   }), [performScan, subscribeToUpdates, updateVideoInList, state.currentPath, state.settings]);
 

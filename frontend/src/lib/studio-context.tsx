@@ -11,6 +11,8 @@ export interface StudioActions {
   toggleSelection: (id: string, isDir: boolean, children?: VideoFile[]) => void;
   scan: () => void;
   process: (targetVideos: VideoFile[]) => Promise<void>;
+  cancel: (video: VideoFile) => Promise<void>;
+  abortAll: () => Promise<void>;
 }
 
 export interface StudioValue {

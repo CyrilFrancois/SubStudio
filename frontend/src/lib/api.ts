@@ -1,4 +1,4 @@
-// api.ts — Backend REST client. Exports: api, scanFolder, startJob.
+// api.ts — Backend REST client. Exports: api, scanFolder, startJob, abortAll, cancelJob.
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -24,6 +24,22 @@ export const api = {
     });
 
     return handleResponse(response, 'Failed to start the processing job');
+  },
+
+  /** POST /api/abort — signals every in-flight AND queued job to stop. */
+  async abortAll() {
+    const response = await fetch(`${API_BASE_URL}/api/abort`, { method: 'POST' });
+    return handleResponse(response, 'Failed to abort the batch');
+  },
+
+  /** DELETE /api/abort/{file_id} — stops one job. 404 means it already finished. */
+  async cancelJob(fileId: string) {
+    const response = await fetch(
+      `${API_BASE_URL}/api/abort/${encodeURIComponent(fileId)}`,
+      { method: 'DELETE' }
+    );
+    if (response.status === 404) return { status: 'not_running', file: fileId };
+    return handleResponse(response, 'Failed to cancel that job');
   }
 };
 
@@ -35,4 +51,4 @@ async function handleResponse(response: Response, defaultError: string) {
   return response.json();
 }
 
-export const { scanFolder, startJob } = api;
+export const { scanFolder, startJob, abortAll, cancelJob } = api;

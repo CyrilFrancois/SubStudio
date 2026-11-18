@@ -5,7 +5,7 @@ import React, { useState } from 'react';
 import { useStudio } from '@/lib/studio-context';
 import SubImportModal from './SubImportModal';
 import { 
-  Check, Loader2, FileText, ChevronDown, Layers, Lock 
+  Check, Loader2, FileText, ChevronDown, Layers, Lock, Play, XCircle
 } from 'lucide-react';
 import { ProcessingStatus, VideoFile } from '@/lib/types';
 
@@ -20,7 +20,7 @@ export default function VideoCard({ video }: { video: VideoFile }) {
 
   // --- UI STATE ---
   const isSelected = state.selectedIds.has(video.id);
-  const isProcessing = !['idle', 'done', 'error', 'folder'].includes(video.status);
+  const isProcessing = !['idle', 'done', 'error', 'cancelled', 'folder'].includes(video.status);
   
   const subInfo = video.subtitleInfo || {
     hasSubtitles: false,
@@ -49,6 +49,7 @@ export default function VideoCard({ video }: { video: VideoFile }) {
     switch (status) {
       case 'done': return 'text-emerald-500';
       case 'error': return 'text-red-500';
+      case 'cancelled': return 'text-amber-500';
       case 'idle': return 'text-gray-600';
       default: return 'text-indigo-500';
     }
@@ -185,17 +186,25 @@ export default function VideoCard({ video }: { video: VideoFile }) {
         </div>
 
         <div className="col-span-3">
-          <button 
-            disabled={isProcessing}
-            onClick={() => actions.process([video])}
-            className={`w-full h-8 rounded font-black text-[10px] uppercase transition-all ${
-              isProcessing 
-              ? 'bg-indigo-500/10 text-indigo-400/50 cursor-not-allowed border border-indigo-500/20' 
-              : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/10 active:scale-[0.97]'
-            }`}
-          >
-            {isProcessing ? 'Processing...' : 'Start Process'}
-          </button>
+          {isProcessing ? (
+            <button
+              onClick={() => actions.cancel(video)}
+              title="Stop this job"
+              className="w-full h-8 rounded font-black text-[10px] uppercase transition-all flex items-center justify-center gap-1.5 bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20 active:scale-[0.97]"
+            >
+              <XCircle size={12} />
+              Cancel
+            </button>
+          ) : (
+            <button
+              onClick={() => actions.process([video])}
+              title="Transcribe, translate and mux this file"
+              className="w-full h-8 rounded font-black text-[10px] uppercase transition-all flex items-center justify-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/10 active:scale-[0.97]"
+            >
+              <Play size={11} fill="currentColor" />
+              Start Process
+            </button>
+          )}
         </div>
       </div>
 

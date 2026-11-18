@@ -5,7 +5,9 @@ import re
 import logging
 import subprocess
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
+
+from .jobs import JobHandle, JobAborted
 
 logger = logging.getLogger("SubStudio.Muxer")
 
@@ -95,7 +97,8 @@ class VideoMuxer:
         current_file: int,
         total_files: int,
         strip_existing: bool = False,
-        cleanup_original: bool = False
+        cleanup_original: bool = False,
+        job: Optional[JobHandle] = None
     ) -> str:
         video_input_path = Path(video_path)
         output_path = video_input_path.parent / f"{video_input_path.stem}_SubStudio.mkv"
@@ -157,10 +160,23 @@ class VideoMuxer:
 
             cmd += [str(output_path)]
 
-            # Execute FFmpeg
-            process = subprocess.run(cmd, capture_output=True, text=True)
+            # Popen (not run) so an abort can kill FFmpeg mid-encode instead of waiting it out.
+            process = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+            )
+            if job:
+                job.track(process)
+            try:
+                _, stderr = process.communicate()
+            finally:
+                if job:
+                    job.untrack()
+
+            if job and job.is_aborted:
+                raise JobAborted(job.file_id)
+
             if process.returncode != 0:
-                raise RuntimeError(process.stderr)
+                raise RuntimeError(stderr)
 
             # Cleanup Temporary SRTs
             for _, p in tmp_srt_paths:
@@ -174,9 +190,18 @@ class VideoMuxer:
 
             return str(output_path)
 
+        except JobAborted:
+            for _, p in tmp_srt_paths:
+                if p.exists(): p.unlink()
+            if output_path.exists():
+                output_path.unlink()
+            logger.warning(f"🛑 {prefix} Muxing aborted by user; partial output removed.")
+            raise
         except Exception as e:
             # Emergency Cleanup
             for _, p in tmp_srt_paths:
                 if p.exists(): p.unlink()
+            if output_path.exists():
+                output_path.unlink()
             logger.error(f"❌ {prefix} Muxing Error: {str(e)}")
             raise Exception(f"Muxing failed: {str(e)}")

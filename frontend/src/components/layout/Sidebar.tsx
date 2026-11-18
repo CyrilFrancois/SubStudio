@@ -5,7 +5,7 @@ import React, { useMemo } from 'react';
 import { useStudio } from '@/lib/studio-context';
 import { 
   Folder, Play, Volume2, Text, Eraser,
-  Check, Loader2, ChevronDown, Cpu, Zap, Settings, Lock
+  Check, Loader2, ChevronDown, Cpu, Zap, Settings, Lock, XCircle
 } from 'lucide-react';
 import { VideoFile } from '@/lib/types';
 
@@ -213,26 +213,29 @@ export default function Sidebar() {
       </div>
 
       <div className="pt-6 border-t border-white/10 bg-[#0a0a0a]">
-        <button 
-          disabled={!hasSelection || isScanning || isAnyFileProcessing}
-          onClick={() => actions.process(selectedVideos)}
-          className={`w-full py-4 rounded-xl font-bold text-sm flex items-center justify-center gap-3 transition-all active:scale-[0.98] shadow-2xl 
-            ${(!hasSelection || isScanning || isAnyFileProcessing) 
-              ? 'bg-white/5 text-gray-600 grayscale opacity-40 cursor-not-allowed shadow-none border border-white/5' 
-              : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-500/40'}`}
-        >
-          {isAnyFileProcessing ? (
-            <>
-              <Loader2 size={18} className="animate-spin text-indigo-400" />
-              <span>PIPELINE BUSY</span>
-            </>
-          ) : (
-            <>
-              <Play size={18} fill="currentColor" />
-              <span>PROCESS {selectedVideos.length} {selectedVideos.length === 1 ? 'FILE' : 'FILES'}</span>
-            </>
-          )}
-        </button>
+        {isAnyFileProcessing ? (
+          <button
+            onClick={actions.abortAll}
+            title="Stop every running and queued job"
+            className="w-full py-4 rounded-xl font-bold text-sm flex items-center justify-center gap-3 transition-all active:scale-[0.98] shadow-2xl bg-red-600 hover:bg-red-500 text-white shadow-red-500/40"
+          >
+            <XCircle size={18} />
+            <span>STOP BATCH</span>
+          </button>
+        ) : (
+          <button
+            disabled={!hasSelection || isScanning}
+            onClick={() => actions.process(selectedVideos)}
+            title={hasSelection ? 'Start the batch' : 'Select at least one video first'}
+            className={`w-full py-4 rounded-xl font-bold text-sm flex items-center justify-center gap-3 transition-all active:scale-[0.98] shadow-2xl
+              ${(!hasSelection || isScanning)
+                ? 'bg-white/5 text-gray-600 grayscale opacity-40 cursor-not-allowed shadow-none border border-white/5'
+                : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-500/40'}`}
+          >
+            <Play size={18} fill="currentColor" />
+            <span>PROCESS {selectedVideos.length} {selectedVideos.length === 1 ? 'FILE' : 'FILES'}</span>
+          </button>
+        )}
       </div>
     </aside>
   );

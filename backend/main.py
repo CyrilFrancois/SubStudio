@@ -6,7 +6,7 @@ import asyncio
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -19,6 +19,7 @@ from core.transcriber import VideoTranscriber
 from core.translator import SubtitleTranslator
 from core.muxer import VideoMuxer
 from core.events import event_manager, setup_logging_bridge
+from core.jobs import job_registry, JobAborted
 
 # --- LOGGING CONFIGURATION ---
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
@@ -92,28 +93,37 @@ class PipelineOrchestrator:
         now = time.time()
         if now - self._last_scan_time < 2.0:
             return self._cached_files
-        
+
         self._cached_files = self.scanner.scan(target_path)
         self._last_scan_time = now
         return self._cached_files
 
     async def run_batch(self, videos: List[VideoJob], opts: GlobalOptions):
         total = len(videos)
+        queued = []
+        for video in videos:
+            if video.path in self.active_jobs:
+                logger.warning(f"⚠️ [Skip] {video.name} is already in the pipeline.")
+                continue
+            # Registered before the loop starts so an abort_all also cancels files that have
+            # not begun yet, instead of only whichever one happens to be running.
+            job_registry.register(video.path)
+            queued.append(video)
+            event_manager.emit(video.path, "queued", 0, "Queued")
+
         try:
             # We no longer re-init self.transcriber here.
             # The lazy-loader inside transcriber.py handles the swap.
-            for idx, video in enumerate(videos):
-                if video.path in self.active_jobs:
-                    logger.warning(f"⚠️ [Skip] {video.name} is already in the pipeline.")
-                    continue
-                await self.execute_pipeline(video, opts, idx, total)
+            for idx, video in enumerate(queued):
+                await self.execute_pipeline(video, opts, idx, len(queued))
         finally:
             logger.info("🏁 BATCH PROCESSING FINISHED")
             event_manager.emit("system_events", "batch_done", 100, "All tasks completed")
 
     async def execute_pipeline(self, video: VideoJob, opts: GlobalOptions, index: int, total: int):
         fid = video.path
-        self.active_jobs.add(fid) 
+        self.active_jobs.add(fid)
+        job = job_registry.get(fid) or job_registry.register(fid)
         
         log_handler = setup_logging_bridge(fid)
         temp_audio = Path(video.path).with_suffix(".tmp.wav")
@@ -123,6 +133,7 @@ class PipelineOrchestrator:
 
         try:
             # STEP 1: CONTEXT
+            job.raise_if_aborted()
             event_manager.emit(fid, "processing", 5, f"{p} Step 1/5: Analyzing context...")
             context = await asyncio.to_thread(self.translator.get_context_profile, video.name)
 
@@ -161,7 +172,8 @@ class PipelineOrchestrator:
                     current_file=index + 1,
                     total_files=total,
                     model_size=opts.transcriptionEngine,
-                    context_prompt=context
+                    context_prompt=context,
+                    job=job
                 )
 
             # STEP 3: SYNC
@@ -171,6 +183,7 @@ class PipelineOrchestrator:
             # STEP 4: TRANSLATION & REFINING
             translated_map = {}
             for lang_code in video.out:
+                job.raise_if_aborted()
                 event_manager.emit(fid, "processing", 50, f"{p} Translating to {lang_code}...")
                 translation = await asyncio.to_thread(
                     self.translator.refine_and_translate,
@@ -178,7 +191,7 @@ class PipelineOrchestrator:
                     target_lang=lang_code,
                     file_id=fid,
                     on_progress=event_manager.emit,
-                    task_manager=type('Task', (object,), {'is_aborted': False}),
+                    job=job,
                     context_profile=context,
                     current_file=index + 1,
                     total_files=total,
@@ -195,6 +208,7 @@ class PipelineOrchestrator:
 
             # STEP 5: MUXING
             if opts.muxIntoMkv:
+                job.raise_if_aborted()
                 event_manager.emit(fid, "processing", 90, f"{p} Muxing into MKV...")
                 await asyncio.to_thread(
                     self.muxer.mux,
@@ -203,17 +217,22 @@ class PipelineOrchestrator:
                     current_file=index + 1,
                     total_files=total,
                     strip_existing=video.stripExistingSubs,
-                    cleanup_original=opts.cleanUp
+                    cleanup_original=opts.cleanUp,
+                    job=job
                 )
 
             event_manager.emit(fid, "done", 100, "Processing Complete")
             logger.info(f"✅ {p} COMPLETED: {video.name}")
 
+        except JobAborted:
+            logger.warning(f"🛑 {p} CANCELLED: {video.name}")
+            event_manager.emit(fid, "cancelled", 0, "Cancelled")
         except Exception as e:
             logger.error(f"❌ {p} ERROR: {str(e)}")
             event_manager.emit(fid, "error", 0, str(e))
         finally:
             self.active_jobs.discard(fid)
+            job_registry.release(fid)
             # Audio cleanup is handled inside the transcriber now, but safe to keep here
             if temp_audio.exists():
                 try: temp_audio.unlink()
@@ -261,6 +280,19 @@ async def process(request: ProcessRequest):
 @app.get("/api/events/{file_id:path}")
 async def events(file_id: str):
     return StreamingResponse(event_manager.subscribe(file_id), media_type="text/event-stream")
+
+@app.post("/api/abort")
+async def abort_all():
+    aborted = job_registry.abort_all()
+    logger.warning(f"🛑 Global abort requested — {len(aborted)} job(s) signalled")
+    return {"status": "aborting", "count": len(aborted), "files": aborted}
+
+@app.delete("/api/abort/{file_id:path}")
+async def abort_one(file_id: str):
+    if not job_registry.abort(file_id):
+        raise HTTPException(status_code=404, detail="No such job in flight")
+    logger.warning(f"🛑 Abort requested for {file_id}")
+    return {"status": "aborting", "file": file_id}
 
 def _log_job_result(task: asyncio.Task):
     if task.cancelled():

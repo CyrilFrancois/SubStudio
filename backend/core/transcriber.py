@@ -1,11 +1,14 @@
+# transcriber.py — VideoTranscriber: Faster-Whisper transcription with killable audio extraction. Exports: VideoTranscriber.
+
 import os
 import logging
 import ffmpeg
 import gc
-import re
 from faster_whisper import WhisperModel
 from typing import Callable, Optional
 from pathlib import Path
+
+from .jobs import JobHandle, JobAborted
 
 logger = logging.getLogger("SubStudio.Transcriber")
 
@@ -27,21 +30,37 @@ class VideoTranscriber:
             self.current_model_size = model_size
         return self.model
 
-    def extract_audio(self, video_path: str) -> str:
+    def extract_audio(self, video_path: str, job: Optional[JobHandle] = None) -> str:
         audio_path = str(Path(video_path).with_suffix(".tmp.wav"))
+        process = None
         try:
-            (
+            # run_async (not run) so the child PID is reachable and abort() can kill it.
+            process = (
                 ffmpeg
                 .input(video_path)
                 .output(audio_path, acodec='pcm_s16le', ac=1, ar='16k', vn=None, sn=None)
                 .overwrite_output()
-                .run(capture_stdout=True, capture_stderr=True)
+                .run_async(pipe_stdout=True, pipe_stderr=True)
             )
+            if job:
+                job.track(process)
+            _, stderr = process.communicate()
+
+            if job and job.is_aborted:
+                raise JobAborted(job.file_id)
+
+            if process.returncode != 0:
+                logger.error(f"❌ Audio extraction failed: {stderr.decode(errors='ignore')[:400]}")
+                return ""
             return audio_path
-        except ffmpeg.Error as e:
-            err = e.stderr.decode() if e.stderr else str(e)
-            logger.error(f"❌ Audio extraction failed: {err}")
+        except JobAborted:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Audio extraction failed: {e}")
             return ""
+        finally:
+            if job:
+                job.untrack()
 
     def format_timestamp(self, seconds: float) -> str:
         seconds = max(0, seconds)
@@ -62,7 +81,8 @@ class VideoTranscriber:
         current_file: int,
         total_files: int,
         model_size: Optional[str] = None,
-        context_prompt: Optional[str] = None
+        context_prompt: Optional[str] = None,
+        job: Optional[JobHandle] = None
     ) -> str:
         audio_file = ""
         file_prefix = f"[{current_file}/{total_files} Files]"
@@ -70,7 +90,7 @@ class VideoTranscriber:
 
         try:
             on_progress(file_id, "transcribing", 5, f"{file_prefix} Step 2/5: Extracting audio...")
-            audio_file = self.extract_audio(video_path)
+            audio_file = self.extract_audio(video_path, job=job)
             
             if not audio_file or not os.path.exists(audio_file):
                 raise Exception("Could not prepare audio for transcription.")
@@ -92,6 +112,9 @@ class VideoTranscriber:
 
             # 1. Collect words and handle terminal logging
             for segment in segments:
+                if job:
+                    job.raise_if_aborted()
+
                 if segment.words:
                     all_words.extend(segment.words)
                 
@@ -138,6 +161,9 @@ class VideoTranscriber:
             on_progress(file_id, "transcribing", 95, f"{file_prefix} Step 2/5: Finalizing subtitles...")
             return "\n".join(srt_blocks)
 
+        except JobAborted:
+            logger.warning(f"🛑 {file_prefix} Transcription aborted by user.")
+            raise
         except Exception as e:
             logger.error(f"❌ {file_prefix} Transcription error: {str(e)}")
             raise e
