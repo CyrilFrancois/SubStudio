@@ -25,10 +25,10 @@ thing in different words). Only what names SubStudio stays in the project.
 | §9 reply shape | dropped, reworded as workspace §8; the systems line (pushed subject + SHA) kept in `CLAUDE.md` « Checks » | already in the harness |
 | §10 Project log files | dropped | Cyril's workspace decision (2026-11-18): logs move to the workspace root (workspace §6, `log-files.md`) |
 | §11 Secrets | `.claude/rules/git-and-secrets.md` keeps `.env` as the home and the read-into-a-variable / fingerprint commands; the rest dropped as workspace §5 | `.env` stays: docker compose reads it, and a copy in `SECRETS.MD` would drift. So a SubStudio value pasted in chat goes to `.env`, not `SECRETS.MD`: this overrides workspace §5 for this project |
-| §12 Shell traps | `.claude/rules/git-and-secrets.md` keeps the lines not yet in the workspace layer (timed-out command still running, JSON with a parser, PowerShell ANSI, `sh -c` never `sh -lc`, « the in-memory batch died with » a Windows restart); the rest dropped as `windows-host.md` / `code-and-data.md` | general rules kept verbatim in the project until Cyril approves promoting them (workspace `TODOLIST.MD`, `[Workspace]`) |
+| §12 Shell traps | `.claude/rules/git-and-secrets.md` keeps the lines not yet in the workspace layer (timed-out command still running, JSON with a parser, PowerShell ANSI, `sh -c` never `sh -lc`, « the in-memory batch died with » a Windows restart); the rest dropped as `windows-host.md` / `code-and-data.md` | general rules kept verbatim here too; Cyril approved promoting them, and they were added to the workspace `code-and-data.md` / `windows-host.md` and the harness repo on 2026-11-18 (harness commit 6887c2c, CI green) |
 | §13 Telling the user WHERE | `.claude/rules/git-and-secrets.md` keeps SubStudio's URLs and how config takes effect; the rest dropped as workspace §7 | project |
 | §14 Security | `.claude/rules/git-and-secrets.md` (verbatim) | project |
-| §15 Several sessions, one checkout | `.claude/rules/git-and-secrets.md` (verbatim) | mostly project-repo practice; « read every hunk », « guard every `cd` » are general and queued for promotion |
+| §15 Several sessions, one checkout | `.claude/rules/git-and-secrets.md` (verbatim) | mostly project-repo practice; « read every hunk », « guard every `cd` », the stash and `ls-remote` rules were also promoted to the workspace layer and the harness repo (2026-11-18, 6887c2c) |
 
 ## What else moved
 
