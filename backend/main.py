@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import List, Optional, Any, Set
+from typing import Dict, List, Optional, Any, Set
 
 # Core Imports
 from core.scanner import VideoScanner
@@ -64,8 +64,9 @@ class PipelineOrchestrator:
         self.muxer = VideoMuxer()
         
         self.active_jobs: Set[str] = set()
-        self._last_scan_time = 0
-        self._cached_files = []
+        # Cache keyed BY PATH: a single timestamp meant two scans of different folders
+        # within the debounce window both returned the first folder's contents.
+        self._scan_cache: Dict[str, tuple] = {}
 
     def split_long_lines(self, srt_text: str, max_chars: int = 50) -> str:
         """Adds \n to subtitle lines that are too long."""
@@ -91,12 +92,13 @@ class PipelineOrchestrator:
 
     def get_files(self, target_path: str):
         now = time.time()
-        if now - self._last_scan_time < 2.0:
-            return self._cached_files
+        cached = self._scan_cache.get(target_path)
+        if cached and now - cached[0] < 2.0:
+            return cached[1]
 
-        self._cached_files = self.scanner.scan(target_path)
-        self._last_scan_time = now
-        return self._cached_files
+        files = self.scanner.scan(target_path)
+        self._scan_cache[target_path] = (now, files)
+        return files
 
     async def run_batch(self, videos: List[VideoJob], opts: GlobalOptions):
         total = len(videos)
