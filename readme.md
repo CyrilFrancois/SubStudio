@@ -55,7 +55,7 @@ All routes are prefixed `/api`, except `/health`.
 
 ### `GET /api/scan?target_path=/data`
 
-Recursive walk. Returns folders and videos; results are cached for 2 seconds.
+Recursive walk. Returns folders and videos; results are cached for 2 seconds per folder.
 
 ```json
 {
@@ -131,9 +131,20 @@ event (there are no named event types), each carrying one JSON object:
 {"type": "log",    "fileId": "/data/m.mkv", "level": "INFO", "message": "Transcription Progress: 60%"}
 ```
 
-`status` is one of `processing`, `transcribing`, `translating`, `done`, `error`. Progress runs
-5 → 100. A `: keepalive` comment is sent every 15 s of silence. The stream stays open until the
-client closes it; the dashboard closes on `done` or `error`.
+`status` is one of `queued`, `processing`, `transcribing`, `translating`, `done`, `error`,
+`cancelled`. Progress runs 5 → 100. A `: keepalive` comment is sent every 15 s of silence. The
+stream stays open until the client closes it.
+
+### `POST /api/abort`
+
+Stops every running **and queued** job of the batch: `{"status": "aborting", "count": N, "files": [...]}`.
+A running FFmpeg child is killed, the partial `_SubStudio.mkv` is removed, and each job reports
+`cancelled` on its SSE stream. The dashboard's **STOP BATCH** button calls it.
+
+### `DELETE /api/abort/{file_id}`
+
+Stops one job (`file_id` URL-encoded once). `404` means it is not running any more. The card's
+**Cancel** button calls it.
 
 ### `GET /health`
 
@@ -154,7 +165,7 @@ subtitle tracks from the output instead of carrying them over.
 
 > **Embedded subtitle tracks cannot currently be used as a translation source.** They are
 > detected and shown on the badge, but `hybrid`/`srt` only look for *sidecar files*. A video whose
-> only subtitles are embedded will be transcribed from audio. See `TODOLIST.md`.
+> only subtitles are embedded will be transcribed from audio. This is a known gap on the backlog.
 
 ## 🚦 Getting started
 
@@ -227,8 +238,8 @@ copied, so bitmap tracks are safe; a failure here is usually a corrupt source fi
 
 **Out of memory** — drop to a smaller model. int8 quantisation is already on.
 
-**Subtitles out of sync** — `syncOffset` shifts every timestamp (positive = later). It works via
-the API but has no UI control yet.
+**Subtitles out of sync** — set **Sync (s)** on the video's card (`syncOffset` in the API): it
+shifts every timestamp, positive = later, negative = earlier.
 
 ## 📂 Project structure
 
@@ -263,9 +274,9 @@ the API but has no UI control yet.
 ├── ressources/                    # logo.png, screen.png
 ├── .env.example
 ├── .gitignore
+├── .claude/rules/                 # Engineering and git rules for Claude Code
 ├── CLAUDE.md                      # Working instructions for Claude Code
-├── DONELIST.md                    # Completed-work log
-├── TODOLIST.md                    # Backlog
+├── doc/                           # Project notes (how the Claude rules are organised)
 ├── docker-compose.yml
 └── readme.md
 ```
