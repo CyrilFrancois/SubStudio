@@ -15,3 +15,6 @@ __pycache__/
 
 # TypeScript incremental build cache
 *.tsbuildinfo
+
+# Local archive of pre-harness files (may hold runbooks)
+_archive/
