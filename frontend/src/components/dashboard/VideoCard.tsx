@@ -5,7 +5,7 @@ import React, { useState } from 'react';
 import { useStudio } from '@/lib/studio-context';
 import SubImportModal from './SubImportModal';
 import { 
-  Check, Loader2, FileText, ChevronDown, Layers, Lock, Play, XCircle
+  Check, Loader2, FileText, ChevronDown, Layers, Play, XCircle
 } from 'lucide-react';
 import { ProcessingStatus, VideoFile } from '@/lib/types';
 
@@ -17,6 +17,7 @@ export default function VideoCard({ video }: { video: VideoFile }) {
   const targetLanguages = video.targetLanguages || ['fr'];
   const workflowMode = video.workflowMode || 'hybrid';
   const stripExistingSubs = video.stripExistingSubs ?? state.settings.stripExistingSubs;
+  const syncOffset = video.syncOffset ?? 0;
 
   // --- UI STATE ---
   const isSelected = state.selectedIds.has(video.id);
@@ -121,14 +122,32 @@ export default function VideoCard({ video }: { video: VideoFile }) {
       <div className="px-4 pb-4 grid grid-cols-12 gap-4 items-end">
         
         <div className="col-span-2 space-y-1.5">
-          <span className="text-[8px] font-bold text-gray-600 uppercase tracking-tighter">Input</span>
-          <button 
-            disabled 
-            className="w-full flex items-center justify-between bg-white/[0.02] border border-white/5 p-2 rounded text-[10px] text-gray-600 font-mono uppercase cursor-not-allowed h-8"
-          >
-            AUTO
-            <Lock size={10} />
-          </button>
+          <label htmlFor={`sync-${video.id}`} className="text-[8px] font-bold text-gray-600 uppercase tracking-tighter block">
+            Sync (s)
+          </label>
+          <div className="relative">
+            <input
+              id={`sync-${video.id}`}
+              type="number"
+              step="0.1"
+              value={syncOffset}
+              title="Shift every subtitle. Positive = later, negative = earlier."
+              onChange={(e) => {
+                const parsed = parseFloat(e.target.value);
+                actions.updateVideoData(video.id, { syncOffset: Number.isFinite(parsed) ? parsed : 0 });
+              }}
+              className={`w-full bg-black/40 border p-2 rounded text-[10px] font-mono h-8 outline-none transition-colors ${
+                syncOffset !== 0
+                  ? 'border-amber-500/40 text-amber-400'
+                  : 'border-white/5 text-gray-400 focus:border-indigo-500'
+              }`}
+            />
+            {syncOffset !== 0 && (
+              <span className="absolute -top-4 right-0 text-[8px] font-bold text-amber-500">
+                {syncOffset > 0 ? `+${syncOffset}s` : `${syncOffset}s`}
+              </span>
+            )}
+          </div>
         </div>
 
         <div className="col-span-2 space-y-1.5">
