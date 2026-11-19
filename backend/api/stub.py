@@ -69,18 +69,9 @@ class StubJobs:
         return job
 
     def overlay(self, library: LibraryResponse) -> LibraryResponse:
-        """Put queued/running/failed job states into the coverage cells they will change."""
-        latest: Dict[tuple, Job] = {}
-        for j in sorted(self.jobs.values(), key=lambda j: j.created_at):
-            for lang in j.languages:
-                latest[(j.video_id, lang)] = j
-        for v in library.videos:
-            for i, c in enumerate(v.coverage):
-                j = latest.get((v.id, c.language))
-                if j and j.state in ("queued", "running", "failed") and c.state != "passed":
-                    state = "pending" if j.state == "queued" else j.state
-                    v.coverage[i] = c.model_copy(update={"state": state, "job_id": j.id, "reason": j.error})
-        return library
+        """Put queued/running/failed job states into the coverage cells they will change (one rule: job_store)."""
+        from .job_store import overlay
+        return overlay(library, self.jobs.values())
 
     def cues(self, video_id: str, lang: str) -> CueList:
         lines = [("Where are you going?", "Où vas-tu ?"), ("Upstairs. Don't wait for me.", "En haut. Ne m'attends pas.")]
