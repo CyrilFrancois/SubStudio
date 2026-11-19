@@ -1,4 +1,4 @@
-# inplace.py — The verified swap: put new subtitle tracks INTO the source video and rename it with a (Sub-EN,FR) marker, never losing the source. Exports: update_in_place, subtitle_streams, marked_name, OutputResult, OutputError, OutputBusy.
+# inplace.py — The verified swap: put new subtitle tracks INTO the source video and rename it with a (Sub-EN,FR) marker, never losing the source. Exports: update_in_place, marked_name, marker, OutputResult.
 """
 Cyril's rule (doc/user-process.md §4, D-0002; CLAUDE.md « Forbidden »): a source video is replaced only by this swap.
 
@@ -12,7 +12,6 @@ library. A video with nothing new is not touched at all, not even renamed.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import secrets
@@ -24,36 +23,26 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Collection, Dict, List, Literal, Mapping, Optional, Sequence, Set
 
-import pysubs2
 from babelfish import Language
 
 from ..acquire.plan import normalize_language
-from ..jobs import JobAborted, JobHandle
-from ..provenance import (ORIGIN_TAG, ORIGINS, REVIEWED_TAG, REVIEWED_YES, is_substudio_track, name_marker,
-                          strip_name_marker, substudio_track_title)
+from ..jobs import JobHandle
+from ..provenance import (ORIGIN_TAG, ORIGINS, REVIEWED_TAG, REVIEWED_YES, name_marker, strip_name_marker,
+                          substudio_track_title)
 from ..subtitles import Cue, drop_after, to_srt
+from .media import (_TEXT_TO_SRT, OutputBusy, OutputError, _disposition, _duration, _is_cover, _kept_subs, _probe,
+                    _run, subtitle_streams)
+from .verify import _verify
 
 logger = logging.getLogger("SubStudio.Output")
 
 # The temp file is `<stem>.substudio-tmp-<pid>-<random>.mkv`, created with O_EXCL: a unique name this run owns, so
 # no user file is ever overwritten or deleted as « our temp », and two runs can never write the same temp.
 TMP_MARK = ".substudio-tmp-"
-DURATION_TOLERANCE_S = 1.0
 
 # One swap at a time per source in this process (the job system runs in one backend process).
 _LOCKS: Dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
-# Subtitle codecs an MKV cannot hold as they are; converted to SRT when the source is an MP4.
-_TEXT_TO_SRT = {"mov_text"}
-
-
-class OutputError(RuntimeError):
-    """The swap did not happen; the source is unchanged (the message says why, in one sentence)."""
-
-
-class OutputBusy(OutputError):
-    """Another swap of the same video is running in this process; nothing was done (callers answer « busy »)."""
-
 
 @dataclass(frozen=True)
 class OutputResult:
@@ -89,35 +78,6 @@ def marked_name(source: Path, languages: Sequence[str]) -> str:
 
 # ---------------------------------------------------------------- ffmpeg
 
-def _run(cmd: List[str], job: Optional[JobHandle]) -> subprocess.CompletedProcess:
-    # Popen (not run) so a Cancel can kill ffmpeg mid-write, as the muxer does.
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if job:
-        job.track(process)
-    try:
-        out, err = process.communicate()
-    finally:
-        if job:
-            job.untrack()
-    if job and job.is_aborted:
-        raise JobAborted(job.file_id)
-    return subprocess.CompletedProcess(cmd, process.returncode, out, err)
-
-
-def _probe(path: Path) -> dict:
-    cmd = ["ffprobe", "-v", "error", "-print_format", "json", "-show_streams", "-show_format", "-show_chapters",
-           str(path)]
-    result = subprocess.run(cmd, capture_output=True)
-    if result.returncode != 0:
-        raise OutputError(f"ffprobe could not read {path.name}: {result.stderr.decode('utf-8', 'replace').strip()[:300]}")
-    return json.loads(result.stdout.decode("utf-8", "replace"))
-
-
-def subtitle_streams(path: Path) -> Dict[int, int]:
-    """{position among subtitle streams: stream index} of a video as it is (an untouched one maps to itself)."""
-    subs = [s["index"] for s in _probe(Path(path)).get("streams", []) if s.get("codec_type") == "subtitle"]
-    return dict(enumerate(subs))
-
 
 def _moved_subs(source_info: dict, kept: List[dict], final: Path) -> Dict[int, int]:
     # The mux maps the kept subtitles in source order before the new ones: the k-th subtitle of the new file is
@@ -126,65 +86,6 @@ def _moved_subs(source_info: dict, kept: List[dict], final: Path) -> Dict[int, i
                 enumerate(s for s in source_info.get("streams", []) if s.get("codec_type") == "subtitle")}
     now = subtitle_streams(final)
     return {position[s["index"]]: now[k] for k, s in enumerate(kept) if k in now}
-
-
-def _is_cover(stream: dict) -> bool:
-    return bool(stream.get("disposition", {}).get("attached_pic"))
-
-
-def _disposition(s: dict) -> str:
-    """The source stream's flags as ffmpeg's -disposition value (`default+forced`, or `0` for none)."""
-    on = [k for k, v in s.get("disposition", {}).items() if v]
-    return "+".join(on) if on else "0"
-
-
-def _flags(s: dict) -> tuple:
-    d = s.get("disposition", {})
-    return (int(d.get("default", 0)), int(d.get("forced", 0)))
-
-
-def _sub_key(s: dict) -> tuple:
-    """What must survive of a kept subtitle track. MP4 text becomes SRT in MKV, so mov_text counts as subrip."""
-    codec = s.get("codec_name", "?")
-    tags = s.get("tags", {})
-    return ("subrip" if codec in _TEXT_TO_SRT else codec, normalize_language(tags.get("language")),
-            tags.get("title"), _flags(s))
-
-
-def _signature(info: dict) -> dict:
-    """Everything of the source the new file must carry unchanged, except the subtitle tracks (checked apart)."""
-    streams = info.get("streams", [])
-    return {
-        "video": [(s.get("codec_name"), _flags(s)) for s in streams
-                  if s.get("codec_type") == "video" and not _is_cover(s)],
-        "audio": [(s.get("codec_name"), normalize_language(s.get("tags", {}).get("language")), _flags(s))
-                  for s in streams if s.get("codec_type") == "audio"],
-        "covers": len([s for s in streams if s.get("codec_type") == "video" and _is_cover(s)]),
-        "attachments": sorted(s.get("tags", {}).get("filename", "?") for s in streams
-                              if s.get("codec_type") == "attachment"),
-        "chapters": len(info.get("chapters", [])),
-    }
-
-
-def _duration(info: dict) -> float:
-    try:
-        return float(info["format"]["duration"])
-    except (KeyError, TypeError, ValueError):
-        raise OutputError("the video has no readable duration")
-
-
-def _kept_subs(info: dict, new_langs: Set[str]) -> List[dict]:
-    """Existing subtitle tracks that stay: all of them, except OUR previous track of a language being rewritten."""
-    kept = []
-    for s in info.get("streams", []):
-        if s.get("codec_type") != "subtitle":
-            continue
-        tags = s.get("tags", {})
-        if normalize_language(tags.get("language")) in new_langs and \
-                is_substudio_track(kind="embedded", title=tags.get("title")):
-            continue
-        kept.append(s)
-    return kept
 
 
 _COVER_TYPES = {"mjpeg": ("jpg", "image/jpeg"), "png": ("png", "image/png"),
@@ -259,50 +160,6 @@ def _mux_args(source: Path, info: dict, srt_paths: List[tuple], tmp: Path, cover
                 f"-metadata:s:t:{n_att + j}", f"filename={name}"]
     cmd += ["-f", "matroska", str(tmp)]
     return cmd
-
-
-def _decoded_cue_count(path: Path, sub_index: int) -> int:
-    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(path), "-map", f"0:s:{sub_index}", "-f", "srt", "-"]
-    result = subprocess.run(cmd, capture_output=True)
-    if result.returncode != 0:
-        raise OutputError(f"the new subtitle track #{sub_index} cannot be decoded")
-    return len(pysubs2.SSAFile.from_string(result.stdout.decode("utf-8", "replace"), format_="srt").events)
-
-
-def _verify(source_info: dict, tmp: Path, expected: Dict[str, int], origins: Optional[Mapping[str, str]] = None,
-            reviewed: Collection[str] = ()) -> None:
-    """The check the swap depends on. Raises OutputError on the first difference."""
-    out = _probe(tmp)
-    before, after = _signature(source_info), _signature(out)
-    for part in before:
-        if before[part] != after[part]:
-            raise OutputError(f"the new file's {part} differ from the source ({after[part]} vs {before[part]})")
-    drift = abs(_duration(out) - _duration(source_info))
-    if drift > DURATION_TOLERANCE_S:
-        raise OutputError(f"the new file's duration differs from the source by {drift:.1f} s")
-
-    subs = [s for s in out.get("streams", []) if s.get("codec_type") == "subtitle"]
-    kept_before = [_sub_key(s) for s in _kept_subs(source_info, set(expected))]
-    kept_after = [_sub_key(s) for s in subs[:len(kept_before)]]
-    if kept_after != kept_before or len(subs) != len(kept_before) + len(expected):
-        raise OutputError(f"the existing subtitle tracks were not all kept ({kept_after} vs {kept_before})")
-    for lang, count in expected.items():
-        title = substudio_track_title(lang)
-        found = [i for i, s in enumerate(subs) if s.get("tags", {}).get("title") == title]
-        if len(found) != 1:
-            raise OutputError(f"the new file has {len(found)} « {title} » tracks instead of one")
-        tag = subs[found[0]].get("tags", {}).get("language")
-        if normalize_language(tag) != lang:
-            raise OutputError(f"the « {title} » track is tagged {tag!r}")
-        tags = {k.upper(): v for k, v in subs[found[0]].get("tags", {}).items()}
-        if origins is not None and tags.get(ORIGIN_TAG) != origins[lang]:
-            raise OutputError(f"the « {title} » track records origin {tags.get(ORIGIN_TAG)!r} instead of {origins[lang]!r}")
-        if (tags.get(REVIEWED_TAG) == REVIEWED_YES) != (lang in reviewed):
-            raise OutputError(f"the « {title} » track's reviewed mark is {tags.get(REVIEWED_TAG)!r}, expected "
-                              f"{REVIEWED_YES if lang in reviewed else 'none'}")
-        decoded = _decoded_cue_count(tmp, found[0])
-        if decoded != count:
-            raise OutputError(f"the « {title} » track decodes to {decoded} cues instead of {count}")
 
 
 # ---------------------------------------------------------------- the swap
