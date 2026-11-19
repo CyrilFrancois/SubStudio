@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 from .acquire.types import LanguagePlan, Rung
 from .subtitles import Cue, TranslationContext, TranslationFailed, Translator, translate_cues
@@ -100,6 +100,8 @@ class VideoRun:
     human: Dict[str, Source] = field(default_factory=dict)        # language → a human subtitle that passed rung 1–2
     asr: Optional[Source] = None                                  # the transcription, made at most once per run
     context: TranslationContext = field(default_factory=TranslationContext)
+    # The gate's speech spans (ms) and the audio's length (ms), read once per video and reused by a retry.
+    speech: Optional[Tuple[List[Tuple[int, int]], Optional[int]]] = None
     output_path: Optional[str] = None  # the video's name after the in-place swap renamed it (core/output.write_run)
 
     def passed(self) -> Dict[str, List[Cue]]:

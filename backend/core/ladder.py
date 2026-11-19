@@ -15,13 +15,14 @@ import logging
 import os
 import tempfile
 from dataclasses import dataclass, field, replace
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .acquire import FetchResult, ProvidersUnavailable, fetch
 from .acquire.types import ExistingSub, Rung
 from .cells import CellState, Origin, Source, VideoRun, produce_cell
+from .gate import THRESHOLDS
 from .jobs import JobAborted
-from .subtitles import Cue, TranslationContext, Translator, detect_language, load_file
+from .subtitles import Cue, TranslationContext, Translator, detect_language, load_file, wrap_lines
 
 logger = logging.getLogger("SubStudio.Ladder")
 
@@ -49,6 +50,10 @@ class LadderDeps:
     # The context for a source made of these cues (core/context.get_context: the lookup plus the names in them).
     # None: the run's context as is.
     context: Optional[Callable[[Optional[List[Cue]]], TranslationContext]] = None
+    # The quality gate (core/gate.evaluate) and the speech it measures against: () → (spans in ms, audio length ms),
+    # blocking, called once per video. None (tests only): every subtitle is accepted as is.
+    gate: Optional[Callable[..., Any]] = None
+    speech: Optional[Callable[[], Tuple[List[Tuple[int, int]], Optional[int]]]] = None
     check_abort: Callable[[], None] = lambda: None
     progress: Callable[[str, int, str], None] = lambda status, percent, message: None
 
@@ -114,7 +119,10 @@ class Ladder:
             raise
         except Exception as e:  # an unreadable subtitle falls through to the next rung, with its reason
             return None, f"unreadable {sub.language} {sub.kind}: {str(e)[:120]}"
-        return (cues, "") if cues else (None, f"{sub.language} {sub.kind} has no lines")
+        if not cues:
+            return None, f"{sub.language} {sub.kind} has no lines"
+        why = await self._verdict(cues, sub.language, label=sub.language)
+        return (None, f"{sub.language} {sub.kind} rejected: {why}") if why else (cues, "")
 
     async def _download(self, langs: List[str]) -> None:
         self.deps.progress("processing", 12, f"Searching online for {', '.join(l.upper() for l in langs)} subtitles...")
@@ -143,9 +151,15 @@ class Ladder:
                 self._note(lang, "download: found, but it could not be matched to the audio")
             else:
                 try:
-                    self._accept(lang, await asyncio.to_thread(load_file, got.path), Rung.DOWNLOAD)
+                    got_cues = await asyncio.to_thread(load_file, got.path)
                 except Exception as e:
                     self._note(lang, f"download: unreadable file: {str(e)[:120]}")
+                    continue
+                why = await self._verdict(got_cues, lang)
+                if why:
+                    self._note(lang, f"download: rejected: {why}")
+                else:
+                    self._accept(lang, got_cues, Rung.DOWNLOAD)
 
     async def _search_again(self, lang: str) -> bool:
         cell, plan = self.run.cells[lang], self.run.plans[lang]
@@ -178,9 +192,7 @@ class Ladder:
                     self._note(lang, "translate: no good subtitle in another language")
                     continue
                 for src in sources:
-                    await asyncio.to_thread(produce_cell, cell, self.run.human[src], self.deps.translator,
-                                            on_batch=on_batch, check_abort=self.deps.check_abort)
-                    if cell.state == CellState.PASSED:
+                    if await self._produce(cell, self.run.human[src], on_batch):
                         return
                     if src != sources[-1]:
                         self._note(lang, f"translate from {src}: {cell.reason}")
@@ -194,11 +206,49 @@ class Ladder:
                 except Exception as e:
                     cell.state, cell.reason = CellState.FAILED, f"transcription failed: {str(e)[:160]}"
                     return
-                await asyncio.to_thread(produce_cell, cell, source, self.deps.translator,
-                                        on_batch=on_batch, check_abort=self.deps.check_abort)
+                await self._produce(cell, source, on_batch)
                 return
         cell.state = CellState.FAILED
         cell.reason = cell.attempts[-1] if cell.attempts else "no rung could produce this language"
+
+    async def _produce(self, cell, source: Source, on_batch) -> bool:
+        """Translate (or keep, for a transcript in the cell's language) from `source`, wrap the lines as they will
+        be written, then gate them. False with cell.reason set when either step fails."""
+        await asyncio.to_thread(produce_cell, cell, source, self.deps.translator,
+                                on_batch=on_batch, check_abort=self.deps.check_abort)
+        if cell.state != CellState.PASSED:
+            return False
+        # Wrapped at the gate's own line limit: one number, so SubStudio's wrapping can never fail its own gate.
+        cell.cues = wrap_lines(cell.cues, THRESHOLDS["max_line_chars"])
+        translated = source.language != cell.language
+        why = await self._verdict(cell.cues, cell.language, source=source.cues if translated else None)
+        if why:
+            cell.state, cell.reason, cell.cues = CellState.FAILED, why, None
+            return False
+        return True
+
+    async def _verdict(self, cues: List[Cue], lang: str, label: Optional[str] = None,
+                       source: Optional[List[Cue]] = None) -> Optional[str]:
+        """None when the gate passes `cues` for `lang`, else its one sentence (Verdict.reason). The speech is the
+        gate's own (core/gate.detect_speech), read once per video, never Whisper's."""
+        if self.deps.gate is None:
+            return None
+        if self.run.speech is None:
+            try:
+                self.run.speech = await asyncio.to_thread(self.deps.speech)
+            except JobAborted:
+                raise
+            except Exception as e:  # no audio, unreadable audio: nothing can be checked, so nothing passes
+                return f"the audio could not be checked: {str(e)[:120]}"
+        spans, duration_ms = self.run.speech
+        try:
+            v = await asyncio.to_thread(self.deps.gate, cues, spans, lang, label=label, duration_ms=duration_ms,
+                                        source=source)
+        except JobAborted:
+            raise
+        except Exception as e:  # e.g. « no speech detected: sync cannot be measured »: unchecked, so not passed
+            return str(e)[:200] or type(e).__name__
+        return None if v.passed else (v.reason or "rejected by the quality gate")
 
     async def asr(self) -> Source:
         if self.run.asr is None:

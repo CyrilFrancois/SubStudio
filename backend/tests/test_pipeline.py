@@ -16,6 +16,8 @@ if not shutil.which("ffmpeg"):
 import main  # noqa: E402
 from core.events import event_manager  # noqa: E402
 from core.provenance import is_substudio_track  # noqa: E402
+from core.gate import Verdict  # noqa: E402
+PASS = Verdict(True)
 
 # Cue 3 starts after the 3-second clip ends and must not reach the MKV.
 SIDECAR = ("1\n00:00:00,500 --> 00:00:01,200\nBonjour Hélène.\n\n"
@@ -53,6 +55,8 @@ def clip(tmp_path):
 
 def run(video, translator, out=("fr",)):
     orch = main.PipelineOrchestrator()
+    # The clips carry a tone, not speech: these tests check the cells' plumbing; core/gate has its own tests.
+    orch.gate = lambda *a, **k: PASS
     orch.translator = translator
     job = main.VideoJob(name=video.name, path=str(video), out=list(out), workflowMode="hybrid", syncOffset=0.25)
     opts = main.GlobalOptions()
