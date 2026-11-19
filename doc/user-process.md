@@ -37,9 +37,10 @@ Notes:
 - Rung 2 runs **for OV too**: a human OV subtitle downloaded beats ASR, and becomes the source for rung 3.
 - A good subtitle found at rung 1 or 2 in one language is the source for the others (rung 3), so ASR runs only when
   no language has a usable subtitle.
-- The correction pass of rung 4 (inferred design, to bench): a re-run of ASR on the segments the gate flagged (low
-  confidence, too fast, empty speech) plus a text pass that fixes names against the looked-up glossary. It must change
-  text only, never timings.
+- The correction pass of rung 4 was built and benched (re-run of ASR on flagged segments + name fixes from the
+  glossary, text only) and **made no transcript better** on 3 clips (WER equal or worse). **Rung 4 ships without it**
+  (D-0005): the gate still evaluates the transcript, and a failing one fails its cell with the reason. The code stays
+  on branch `feat/ov-correction` until a better signal is found.
 
 ## 3. The quality gate: what « good » means
 
