@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import secrets
 import shutil
 import subprocess
@@ -30,7 +29,7 @@ from babelfish import Language
 
 from ..acquire.plan import normalize_language
 from ..jobs import JobAborted, JobHandle
-from ..provenance import is_substudio_track, substudio_track_title
+from ..provenance import ORIGIN_TAG, ORIGINS, is_substudio_track, name_marker, strip_name_marker, substudio_track_title
 from ..subtitles import Cue, drop_after, to_srt
 
 logger = logging.getLogger("SubStudio.Output")
@@ -43,8 +42,6 @@ DURATION_TOLERANCE_S = 1.0
 # One swap at a time per source in this process (the job system runs in one backend process).
 _LOCKS: Dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
-# The marker at the end of a stem: « (Sub-EN,FR) ». Matched case-insensitively so a hand-typed one is replaced too.
-_MARKER_RE = re.compile(r"\s*\(Sub-[A-Za-z]{2}(?:,[A-Za-z]{2})*\)$", re.IGNORECASE)
 # Subtitle codecs an MKV cannot hold as they are; converted to SRT when the source is an MP4.
 _TEXT_TO_SRT = {"mov_text"}
 
@@ -72,20 +69,13 @@ def _iso1(lang: str) -> str:
 
 
 def marker(languages: Sequence[str]) -> str:
-    """[en, fr, en] → `(Sub-EN,FR)`: the actual languages, each once, in the order given."""
-    langs: List[str] = []
-    for raw in languages:
-        code = _iso1(raw)
-        if code not in langs:
-            langs.append(code)
-    if not langs:
-        raise ValueError("A marker needs at least one validated language")
-    return f"(Sub-{','.join(c.upper() for c in langs)})"
+    """[en, fr, en] → `(Sub-EN,FR)`: the actual languages, each once, in the order given (provenance owns the format)."""
+    return name_marker([_iso1(raw) for raw in languages])
 
 
 def marked_name(source: Path, languages: Sequence[str]) -> str:
     """`Ghosts S05E01.mp4`, [en, fr] → `Ghosts S05E01 (Sub-EN,FR).mkv`. An existing marker is replaced, never stacked."""
-    base = _MARKER_RE.sub("", source.stem).rstrip()
+    base = strip_name_marker(source.stem).rstrip()
     return f"{base} {marker(languages)}.mkv"
 
 
@@ -200,7 +190,8 @@ def _extract_covers(source: Path, info: dict, work: Path) -> List[tuple]:
     return covers
 
 
-def _mux_args(source: Path, info: dict, srt_paths: List[tuple], tmp: Path, covers: Sequence[tuple] = ()) -> List[str]:
+def _mux_args(source: Path, info: dict, srt_paths: List[tuple], tmp: Path, covers: Sequence[tuple] = (),
+              origins: Mapping[str, str] = {}) -> List[str]:
     """The ffmpeg command writing the temp MKV: every video, audio and attachment stream copied, cover pictures
     re-attached as files, kept subtitles copied (MP4 text → SRT), our replaced tracks dropped, new SRT tracks
     added. Chapters and global metadata follow by ffmpeg's default. Data streams (MP4 timecode) are not carried by
@@ -235,7 +226,8 @@ def _mux_args(source: Path, info: dict, srt_paths: List[tuple], tmp: Path, cover
         k = out_sub + i
         cmd += ["-map", f"{i + 1}:0", f"-c:s:{k}", "srt", f"-disposition:{out_idx + i}", "0",
                 f"-metadata:s:s:{k}", f"language={Language.fromalpha2(lang).alpha3b}",
-                f"-metadata:s:s:{k}", f"title={substudio_track_title(lang)}"]
+                f"-metadata:s:s:{k}", f"title={substudio_track_title(lang)}",
+                f"-metadata:s:s:{k}", f"{ORIGIN_TAG}={origins[lang]}"]
     n_att = sum(1 for s in info.get("streams", []) if s.get("codec_type") == "attachment")
     for j, (p, mime, name) in enumerate(covers):
         cmd += ["-attach", str(p), f"-metadata:s:t:{n_att + j}", f"mimetype={mime}",
@@ -252,7 +244,7 @@ def _decoded_cue_count(path: Path, sub_index: int) -> int:
     return len(pysubs2.SSAFile.from_string(result.stdout.decode("utf-8", "replace"), format_="srt").events)
 
 
-def _verify(source_info: dict, tmp: Path, expected: Dict[str, int]) -> None:
+def _verify(source_info: dict, tmp: Path, expected: Dict[str, int], origins: Optional[Mapping[str, str]] = None) -> None:
     """The check the swap depends on. Raises OutputError on the first difference."""
     out = _probe(tmp)
     before, after = _signature(source_info), _signature(out)
@@ -276,6 +268,9 @@ def _verify(source_info: dict, tmp: Path, expected: Dict[str, int]) -> None:
         tag = subs[found[0]].get("tags", {}).get("language")
         if normalize_language(tag) != lang:
             raise OutputError(f"the « {title} » track is tagged {tag!r}")
+        tags = {k.upper(): v for k, v in subs[found[0]].get("tags", {}).items()}
+        if origins is not None and tags.get(ORIGIN_TAG) != origins[lang]:
+            raise OutputError(f"the « {title} » track records origin {tags.get(ORIGIN_TAG)!r} instead of {origins[lang]!r}")
         decoded = _decoded_cue_count(tmp, found[0])
         if decoded != count:
             raise OutputError(f"the « {title} » track decodes to {decoded} cues instead of {count}")
@@ -322,10 +317,13 @@ def update_in_place(
     tracks: Mapping[str, List[Cue]],
     languages_validated: Sequence[str],
     *,
+    origins: Mapping[str, str],
     job: Optional[JobHandle] = None,
 ) -> OutputResult:
     """Writes `tracks` ({iso 639-1: cues}) into `source` by the verified swap and renames it with the marker of
     `languages_validated` (every language the file now carries validated: the new ones and the kept ones).
+    `origins` ({lang: one of provenance.ORIGINS except "kept"}) is written as the ORIGIN_TAG of each new track,
+    so the Library reads how it was obtained after a rescan.
 
     Nothing new → untouched (no rename). Raises OutputError (source unchanged) on any failed step,
     JobAborted (source unchanged) on Cancel."""
@@ -344,17 +342,23 @@ def update_in_place(
         raise ValueError("every written language must also be in languages_validated")
     if any(not cues for cues in new.values()):
         raise OutputError("a track to write has no cues")
+    origin_of = {_iso1(lang): o for lang, o in origins.items()}
+    for lang in new:
+        o = origin_of.get(lang)
+        if o not in ORIGINS or o == "kept":
+            raise ValueError(f"{lang}: origin must be one of {[x for x in ORIGINS if x != 'kept']}, got {o!r}")
 
     lock = _lock_for(source)
     if not lock.acquire(blocking=False):
         raise OutputError(f"{source.name} is already being updated by another job")
     try:
-        return _swap(source, new, validated, job)
+        return _swap(source, new, validated, {l: origin_of[l] for l in new}, job)
     finally:
         lock.release()
 
 
-def _swap(source: Path, new: Dict[str, List[Cue]], validated: List[str], job: Optional[JobHandle]) -> OutputResult:
+def _swap(source: Path, new: Dict[str, List[Cue]], validated: List[str], origins: Dict[str, str],
+          job: Optional[JobHandle]) -> OutputResult:
     if not source.is_file():
         raise OutputError(f"the source {source.name} does not exist")
     final = source.with_name(marked_name(source, validated))
@@ -383,11 +387,11 @@ def _swap(source: Path, new: Dict[str, List[Cue]], validated: List[str], job: Op
         tmp = _new_temp(source)
         try:
             covers = _extract_covers(source, info, Path(work))
-            result = _run(_mux_args(source, info, srt_paths, tmp, covers), job)
+            result = _run(_mux_args(source, info, srt_paths, tmp, covers, origins), job)
             if result.returncode != 0:
                 raise OutputError(f"ffmpeg could not write the new file: "
                                   f"{result.stderr.decode('utf-8', 'replace').strip()[:300]}")
-            _verify(info, tmp, expected)
+            _verify(info, tmp, expected, origins)
             # The one moment the library changes.
             try:
                 _place(tmp, final, source)
