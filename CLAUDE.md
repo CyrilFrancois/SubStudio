@@ -22,6 +22,11 @@ candidate models: `doc/architecture-review-2026-11-19.md`.
 - **For whom:** Cyril, in three roles: processing a single video, running a batch overnight, watching the result.
 - **Goal:** a library where every video carries correct, well-timed subtitles in the wanted languages, with no
   manual step between dropping a file in `/data` and playing `{stem}_SubStudio.mkv`.
+- **The user process (Cyril, 2026-11-19; D-0002): `doc/user-process.md` is the product spec and wins over the
+  reviews.** Select files → languages (default OV · EN · FR, remembered) → per video × language: keep a good existing
+  subtitle, else download, else translate with context, else ASR + OV correction + translate; every result passes a
+  sync + quality gate; the file is updated in place with a `(Sub-OV,EN,FR)` name marker (Cyril confirmed in-place
+  replacement everywhere, `C:\Videos` included, 2026-11-19; only by the verified swap of « Forbidden » below).
 - **Metric (inferred, not measured yet):** share of a batch that ends in a playable MKV with every requested
   track, and minutes of attention per video. Basis: the overnight-batch role; wrong if Cyril only processes
   single videos.
@@ -51,9 +56,13 @@ correct fix that makes the workflow worse is still wrong.
   never used as a scoring reference; the UI shows the language as missing with « ignored: <lang> <embedded|sidecar> ».
   What the new SubStudio writes is recognised by ONE rule, `backend/core/provenance.py` (muxed track title
   « SubStudio {lang} », sidecars listed in the per-video manifest), and does count.
-- **Forbidden:** `cleanUp=true`, or deleting or overwriting any source video, anywhere (in `C:\Videos` too: 14 GB to
-  re-fetch); touching anything outside `C:\Videos` beyond the exact files a test created; outputs only as new files
-  next to the source, removed by exact name when a test made them. Commit and push are Claude's
+- **Forbidden:** `cleanUp=true`, or deleting or overwriting any source video by any path other than the **verified
+  swap** (in `C:\Videos` too: 14 GB to re-fetch); touching anything outside `C:\Videos` beyond the exact files a test
+  created. **The verified swap is the one allowed way to replace a source** (Cyril, 2026-11-19, D-0002): write the new
+  file next to the source under a temporary name, verify it (same video and audio streams, duration within 1 s, every
+  new subtitle track present and decodable), then atomic rename onto the source; a failed check leaves the source
+  untouched and deletes only the temp file. Any other output is a new file next to the source, removed by exact name
+  when a test made it. Commit and push are Claude's
   (`.claude/rules/git-and-secrets.md` §9).
 
 ## Sources of record
