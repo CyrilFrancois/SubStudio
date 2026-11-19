@@ -2,6 +2,7 @@
 "use client";
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { AlertCircle, Ban, CheckCircle2, ChevronDown, ChevronRight, Clock, Loader2, XCircle } from 'lucide-react';
 import type { Job, LogEvent } from '@/lib/types';
 import { languageName } from '@/lib/languages';
@@ -55,8 +56,15 @@ export default function JobCard({ job, live, onCancel, cancelling }: Props) {
           {job.state === 'queued' && job.position != null && <span className="text-gray-500">#{job.position + 1}</span>}
         </span>
         <h3 className="text-sm text-gray-200 truncate min-w-0 flex-1" title={job.video_name}>{job.video_name}</h3>
-        <span className="text-xs text-gray-500 shrink-0" title={job.languages.map(languageName).join(', ')}>
-          {job.languages.map(l => l.toUpperCase()).join(' · ')}
+        <span className="text-xs text-gray-500 shrink-0 flex gap-2" title={job.languages.map(languageName).join(', ')}>
+          {job.state === 'done'
+            // A finished job opens each language it made in Review.
+            ? job.languages.map(l => (
+                <Link key={l} href={`/review?video=${encodeURIComponent(job.video_id)}&lang=${encodeURIComponent(l)}`}
+                      className="underline underline-offset-2 hover:text-gray-200" aria-label={`Review ${languageName(l)}`}>
+                  {l.toUpperCase()}
+                </Link>))
+            : job.languages.map(l => l.toUpperCase()).join(' · ')}
         </span>
         {duration && <span className="text-xs text-gray-500 tabular-nums shrink-0 w-24 text-right">{duration}</span>}
         {active && onCancel && (

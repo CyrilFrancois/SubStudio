@@ -195,6 +195,12 @@ Screens of D-0002 / ux-review §2, built on the UI API (`backend/api`, below):
   Start. `src/components/library/` — `LibraryTable`, `CoverageChip` (icon + text, never colour
   alone), `VideoDetails` (subtitles found and why not counted, per-video overrides).
 - `src/app/settings/page.tsx` — the one language list (OV + ISO 639-1), `count_existing`; saved on change.
+- `src/app/queue/page.tsx` — batch bar (by `Job.batch_id`), running job's stage stepper with ETA, up next with Cancel,
+  history with reasons and logs. `src/components/queue/`.
+- `src/app/review/page.tsx` — one video × language as lines (`/review?video=<id>&lang=<code>`, opened from a validated
+  Library cell or a finished job): source beside the subtitle, the lines the gate would object to flagged, a dark-frame
+  preview with reading speed, edit and Save. The flags and their limits come from the backend (`api/review.flag_cues`,
+  core/gate THRESHOLDS), never from a frontend copy. `src/components/review/`.
 - `src/components/shell/AppShell.tsx` — navigation, stub-mode banner, backend status.
 - `src/lib/api.gen.ts` — **generated** from the backend's OpenAPI (`npm run gen:types`); `types.ts`
   only aliases it. Never hand-write a backend shape. `src/lib/api.ts` — REST client (every failure
@@ -221,7 +227,8 @@ Videos are addressed by `LibraryVideo.id` (hash of the path), never by the path 
 |---|---|
 | `GET /api/library` | Every video under `SUBSTUDIO_MEDIA_ROOT` × every wanted language: `passed` (with origin) / `missing` / `unchecked` (a subtitle SubStudio did not make, not judged by the gate yet: it counts only once the job store's verdict record passes it, D-0002) / `pending` / `running` / `failed` / `unknown` (ffprobe failed). ffprobe cached by path+mtime+size. What counts as ours: `core/provenance.py`, the one rule. |
 | `GET/PUT /api/settings` | `{languages, count_existing}`, JSON under `SUBSTUDIO_STATE_DIR`, written atomically. |
-| `POST/GET /api/jobs`, `DELETE /api/jobs/{id}`, `GET /api/events`, `GET/PUT /api/subtitles/{id}/{lang}` | Stub only with `SUBSTUDIO_API_STUB=1`; otherwise 501 with the sentence the UI shows, until the job store implements the same models. `/api/events` is one SSE stream, frames discriminated by `kind` (`job`, `log` with the backend's `ts`, `library`). |
+| `POST/GET /api/jobs`, `DELETE /api/jobs/{id}`, `GET /api/events` | The job store (SQLite) or, with `SUBSTUDIO_API_STUB=1`, simulated jobs. `/api/events` is one SSE stream, frames discriminated by `kind` (`job`, `log` with the backend's `ts`, `library`). |
+| `GET/PUT /api/subtitles/{id}/{lang}` | `CueList`; GET adds each line's `flags` and the gate's `limits` (`api/review.flag_cues`). Stub only for now (PUT never simulated); otherwise 501 until workspace-6e serves them from the job store (task 12). |
 | `GET /api/system` | `stub`, media root, CPU/RAM against the D-0001 budget. |
 
 **SSE frames are unnamed** — everything arrives on the default `message` event with a `type`

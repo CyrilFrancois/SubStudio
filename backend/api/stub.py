@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from .events_hub import hub
+from .stub_cues import SAMPLE
 from .schemas import (Cue, CueList, Job, JobCreate, JobCreateResponse, JobEvent, LibraryResponse,
                       LogEvent, StageProgress)
 
@@ -76,10 +77,9 @@ class StubJobs:
         return overlay(library, self.jobs.values())
 
     def cues(self, video_id: str, lang: str) -> CueList:
-        lines = [("Where are you going?", "Où vas-tu ?"), ("Upstairs. Don't wait for me.", "En haut. Ne m'attends pas.")]
-        return CueList(video_id=video_id, language=lang, origin="translated", cues=[
-            Cue(id=i + 1, start_ms=1000 + i * 2500, end_ms=3000 + i * 2500, text=t, source_text=s)
-            for i, (s, t) in enumerate(lines)])
+        # The same made-up French sample for any language: the stub only has to show the screen.
+        return CueList(video_id=video_id, language=lang, origin="translated", from_language="en", cues=[
+            Cue(id=i + 1, start_ms=a, end_ms=b, text=t, source_text=s) for i, (a, b, s, t) in enumerate(SAMPLE)])
 
     # --- internals ---
 

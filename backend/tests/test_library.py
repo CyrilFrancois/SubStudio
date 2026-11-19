@@ -94,8 +94,9 @@ def test_a_subtitle_the_gate_rejected_leaves_the_language_missing(root, monkeypa
     assert v.coverage[0].reason.startswith("rejected by the quality check: en embedded")
 
 
-def test_count_existing_off_ignores_even_a_gate_accepted_record(root, monkeypatch):
-    # The record makes the track SubStudio's own (kept), so it still counts: OFF only ignores unjudged ones.
+def test_count_existing_off_still_counts_a_track_the_gate_kept(root, monkeypatch):
+    # core/provenance: a track the verdict record lists as kept IS SubStudio's own (validated, file left as is),
+    # so it counts like a muxed one; OFF ignores only the subtitles SubStudio has not validated.
     _mkv(root / "ep.mkv", audio_lang="eng", subs=[("eng", "English (SDH)", None), ("fre", "French", None)])
     monkeypatch.setattr(library, "_verdicts", lambda path, st: {"stream:2": "kept"})
     v = _scan(["en", "fr"], count_existing=False)["ep.mkv"]

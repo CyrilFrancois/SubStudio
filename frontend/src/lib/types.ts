@@ -26,3 +26,5 @@ export type SettingsResponse = S['SettingsResponse'];
 export type ProviderStatus = S['ProviderStatus'];
 export type SystemStatus = S['SystemStatus'];
 export type CueList = S['CueList'];
+export type Cue = S['Cue'];
+export type CueFlag = NonNullable<Cue['flags']>[number];
