@@ -93,6 +93,11 @@ def min_score(video) -> int:
     return floor
 
 
+def _content_key(subs: "pysubs2.SSAFile") -> int:
+    """Same timings and same words (spacing, line breaks and styling aside) = the same subtitle, whatever its bytes."""
+    return hash(tuple((e.start, e.end, " ".join(e.plaintext.split())) for e in subs.events if not e.is_comment))
+
+
 def download_subtitles(video_path: str, languages: Iterable[str], out_dir: str, env: Optional[dict] = None,
                        try_one: Optional[Callable[[str, Downloaded], Optional[str]]] = None,
                        per_language: int = 1) -> DownloadReport:
@@ -134,20 +139,36 @@ def download_subtitles(video_path: str, languages: Iterable[str], out_dir: str, 
             code = lang.alpha2
             ranked = sorted((s for s in found if s.language == lang and compute_score(s, video) >= floor),
                             key=lambda s: compute_score(s, video), reverse=True)
-            for n, sub in enumerate(ranked[:max(1, per_language)], start=1):
+            # The same subtitle is often listed under several release names (Ghosts S05, 2026-11-19: on S05E12 #1 and #3
+            # were byte-identical). A copy already judged is skipped and does not use up a try; the downloads stay
+            # capped at twice the tries so a list of copies cannot spend a provider's quota.
+            seen: Dict[str, int] = {}
+            tries = 0
+            for n, sub in enumerate(ranked[:2 * max(1, per_language)], start=1):
+                if tries >= max(1, per_language):
+                    break
                 label = f"{sub.provider_name} #{n}"
                 # A quota or a ban discards the provider inside the pool: its download returns False at once.
                 if not pool.download_subtitle(sub):
+                    tries += 1
                     rejected.setdefault(code, []).append(f"{label}: could not be downloaded")
                     continue
                 path = os.path.join(out_dir, f"{stem}.{code}.{n}.srt")
                 try:
                     # sub.text is decoded by subliminal from the provider's encoding; written as UTF-8 SRT whatever the
                     # provider served (cp1252, ASS…), so no later read can lose the accents.
-                    pysubs2.SSAFile.from_string(sub.text or "").save(path, encoding="utf-8", format_="srt")
+                    parsed = pysubs2.SSAFile.from_string(sub.text or "")
                 except Exception as e:  # unparseable file: the next candidate may be fine
+                    tries += 1
                     rejected.setdefault(code, []).append(f"{label}: unreadable ({str(e)[:80]})")
                     continue
+                same = _content_key(parsed)
+                if same in seen:
+                    logger.info(f"{code}: candidate {label} is the same subtitle as #{seen[same]}; skipped")
+                    continue
+                seen[same] = n
+                tries += 1
+                parsed.save(path, encoding="utf-8", format_="srt")
                 d = Downloaded(code, path, sub.provider_name, "hash" in sub.get_matches(video))
                 why = try_one(code, d) if try_one else None
                 if why:
