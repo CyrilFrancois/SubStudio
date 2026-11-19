@@ -43,6 +43,10 @@ class EventManager:
         self.state_cache[file_id] = data
         self._broadcast(file_id, data)
 
+    def emit_cells(self, file_id: str, cells: List[Dict[str, Any]]):
+        """One frame per change of a video's language cells (D-0002): [{language, state, origin, rung, reason}]."""
+        self._broadcast(file_id, {"type": "cells", "fileId": file_id, "cells": cells})
+
     def emit_log(self, file_id: str, message: str, level: str = "INFO"):
         self._broadcast(file_id, {
             "type": "log",

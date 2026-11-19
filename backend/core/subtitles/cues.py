@@ -1,4 +1,4 @@
-# cues.py — Cue: the one typed subtitle unit; read (charset-detected), shift, clip, wrap, write SRT. Exports: Cue, CueText, SubtitleReadError, load_file, parse, to_srt, shift, drop_after, wrap_lines.
+# cues.py — Cue: the one typed subtitle unit; read (charset-detected), shift, clip, wrap, write SRT. Exports: Cue, CueText, SubtitleReadError, load_file, parse, to_srt, shift, drop_after, wrap_lines, detect_language.
 """
 Every stage of the pipeline passes a list of Cue, never an SRT string. Timings are integers in
 MILLISECONDS and only this module turns them into text, so no other file parses or prints a
@@ -178,3 +178,20 @@ def _wrap_line(line: str, max_chars: int) -> str:
 def wrap_lines(cues: List[Cue], max_chars: int = 50) -> List[Cue]:
     """Splits each line longer than max_chars at the space nearest its middle, again until every piece fits."""
     return [replace(c, text="\n".join(_wrap_line(l, max_chars) for l in c.text.split("\n"))) for c in cues]
+
+
+def detect_language(cues: List[Cue], sample: int = 300, min_probability: float = 0.95) -> Optional[str]:
+    """ISO 639-1 of the cues' text (langdetect on up to `sample` cues), or None when there is too little text or the
+    detection is not clear: a wrong answer would ship an untranslated source as « kept », None means « translate »."""
+    from langdetect import DetectorFactory, LangDetectException, detect_langs
+    DetectorFactory.seed = 0
+    text = " ".join(c.text for c in cues[:sample] if "♪" not in c.text)
+    if len(text.split()) < 20:
+        return None
+    try:
+        best = detect_langs(text)[0]
+    except (LangDetectException, IndexError):
+        return None
+    if best.prob < min_probability:
+        return None
+    return best.lang.split("-")[0]  # langdetect says zh-cn / zh-tw

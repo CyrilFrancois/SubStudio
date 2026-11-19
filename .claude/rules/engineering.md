@@ -62,8 +62,10 @@ asserting a shape (`/api/scan` returns `{"files": [...]}`, not an array).
 
 **Units.** Name the unit of every number: ms vs s, SRT `,` vs `.` decimal, frames vs seconds.
 
-A translation that cannot be completed raises `TranslationFailed` and fails the video: the source
-text is never shipped as if it were the translation (it was until 2026-11-19, silently). Keep it so.
+A translation that cannot be completed raises `TranslationFailed` and fails **that language's cell**
+(`core/cells.py`, D-0002): the other languages still pass and ship, the video reads « error », and the
+source text is never shipped as if it were the translation (it was until 2026-11-19, silently). Keep it so.
+With `cleanUp`, the source is deleted only when every cell passed: it is what a retry starts from.
 
 ### Boundaries that have actually bitten this project
 
@@ -153,6 +155,10 @@ and lost on restart.
   `Translator` contract (`translate([{id, text}], target, context) -> [{id, text}]`, no timing ever
   sent) and `translate_cues`, which batches, rejects an answer whose id set differs (retry once,
   then split down to one cue), re-attaches timings by id, and raises `TranslationFailed`.
+- `backend/core/cells.py` — one `Cell` per video × language: `pending → running → passed | failed`, an
+  `Origin` (`kept`, `downloaded`, `translated from en`, `transcribed`) or a one-sentence reason. A source already
+  in the wanted language (detected) is kept, never translated. `VideoRun` keeps the source and every cell's cues
+  in memory for `POST /api/retry`. The ladder (`core/acquire`) and the quality gate plug in here.
 - `backend/core/translator.py` — `GeminiTranslator`, an optional backend of that contract: Gemini
   REST (`httpx`, no SDK), `thinkingLevel: low`, JSON output with a response schema, 30 cues per
   call, temperature 0.2. `get_context_profile()` builds a story bible from the filename.
@@ -185,6 +191,8 @@ Screens of D-0002 / ux-review §2, built on the UI API (`backend/api`, below):
 | `GET /api/scan?target_path=/data` | `{"files": [...]}`. Cached 2 s — **globally, not per path** (known bug, see the workspace `TODOLIST.MD`). |
 | `POST /api/process` | `{"status":"accepted","count":N}`, returns immediately. |
 | `GET /api/events/{file_id:path}` | SSE. `file_id` = full path, encoded **once**. |
+| `POST /api/retry` | `{video, language, globalOptions}`: re-runs one cell from the source kept in memory, rebuilds the output. `404` before a first run, `409` while the video runs. |
+| `GET /api/cells/{file_id:path}` | `{"fileId", "cells": [{language, state, origin, rung, reason}]}` of the last run. |
 | `GET /health` | `{"status":"online"}`. |
 
 UI API (`backend/api`, models in `backend/api/schemas.py` = the contract; agreed with workspace-64, 2026-11-19).
@@ -198,7 +206,7 @@ Videos are addressed by `LibraryVideo.id` (hash of the path), never by the path 
 | `GET /api/system` | `stub`, media root, CPU/RAM against the D-0001 budget. |
 
 **SSE frames are unnamed** — everything arrives on the default `message` event with a `type`
-discriminator of `"status"` or `"log"`. There is no `event:` line, so `addEventListener("transcribing", …)`
+discriminator of `"status"`, `"log"` or `"cells"` (`CellVerdict[]` in `sse.ts`). There is no `event:` line, so `addEventListener("transcribing", …)`
 can never fire. Progress runs 5 → 100.
 
 **`workflowMode`** is one of `whisper` (always transcribe), `hybrid` (sidecar SRT if found, else

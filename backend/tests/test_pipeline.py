@@ -57,7 +57,7 @@ def run(video, translator, out=("fr",)):
 
 def test_sidecar_to_mkv_keeps_timings_accents_and_clips_past_the_end(clip):
     status = run(clip, Upper())
-    assert status["status"] == "done", status
+    assert status["status"] == "done" and "FR ✓" in status["message"], status
     out = clip.parent / f"{clip.stem}_SubStudio.mkv"
     probe = json.loads(subprocess.run(["ffprobe", "-v", "error", "-print_format", "json", "-show_streams",
                                        "-select_streams", "s", str(out)], capture_output=True, text=True).stdout)
@@ -97,8 +97,13 @@ def test_a_language_the_muxer_cannot_title_fails_before_any_work(clip):
     assert called == []
 
 
-def test_a_later_language_failing_leaves_no_earlier_language_on_disk(clip):
+def test_one_failed_language_does_not_fail_the_others(clip):
+    # D-0002: one verdict per video × language. EN passes and ships; FR fails alone, with its reason.
     status = run(clip, FrenchBroken(), out=("en", "fr"))
-    assert status["status"] == "error" and "fr:" in status["message"], status
-    assert not clip.with_suffix(".en.srt").exists()
-    assert not (clip.parent / f"{clip.stem}_SubStudio.mkv").exists()
+    assert status["status"] == "error", status
+    assert "EN ✓ translated from" in status["message"] and "FR failed: fr:" in status["message"]
+    assert clip.with_suffix(".en.srt").exists() and not clip.with_suffix(".fr.srt").exists()
+    out = clip.parent / f"{clip.stem}_SubStudio.mkv"
+    probe = json.loads(subprocess.run(["ffprobe", "-v", "error", "-print_format", "json", "-show_streams",
+                                       "-select_streams", "s", str(out)], capture_output=True, text=True).stdout)
+    assert [s["tags"].get("language") for s in probe["streams"]] == ["eng"]
