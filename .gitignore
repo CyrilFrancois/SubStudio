@@ -18,3 +18,8 @@ __pycache__/
 
 # Local archive of pre-harness files (may hold runbooks)
 _archive/
+
+# Bench: per-worktree venv, cut clips and the local manifest naming real media
+.venv/
+bench/clips/
+bench/clips.local.json
