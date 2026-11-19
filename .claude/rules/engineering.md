@@ -14,11 +14,13 @@ in `SubStudio/CLAUDE.md` or `SubStudio/.claude/rules/*.md`. Map: `doc/harness-mi
 ### The commands that actually exist here
 
 ```bash
-# Frontend — no Node on the host, so run it in a container
-docker run --rm -v "$PWD/frontend:/app" -w /app node:18-alpine ./node_modules/.bin/tsc --noEmit
-docker run --rm -v "$PWD/frontend:/app" -w /app node:18-alpine ./node_modules/.bin/next build
+# Frontend — natively (Node at C:\Users\cyril\tools\node, 2026-11-19), from frontend/
+npx tsc --noEmit
+npx next build            # NEXT_PUBLIC_API_URL is baked in here, not read at run time
+npm run check:types       # fails when src/lib/api.gen.ts no longer matches backend/api (npm run gen:types)
 
-# Backend — syntax at minimum; there is no mypy/pylint/pytest in requirements.txt
+# Backend — from the repo root, in the worktree's venv (pytest.ini sets the paths)
+.venv/Scripts/python.exe -m pytest -q
 python -c "import ast; ast.parse(open('backend/main.py',encoding='utf-8').read())"
 
 # Runtime
@@ -163,14 +165,18 @@ and lost on restart.
 
 ### Frontend (Next.js 14, TypeScript)
 
-- `src/app/page.tsx` — owns `StudioState`, SSE subscriptions, batch dispatch.
-- `src/lib/studio-context.tsx` — `StudioContext` + `useStudio`. **This must not live in
-  `page.tsx`**: the App Router rejects non-standard exports from a page module and `next build`
-  fails with "StudioContext is not a valid Page export field".
-- `src/lib/types.ts` — single source of truth; must mirror the backend's actual JSON.
-- `src/lib/api.ts` — REST client. `src/lib/sse.ts` — EventSource wrapper.
-- `src/components/dashboard/` — `VideoList`, `VideoCard`, `GlobalProgress`, `SubImportModal`.
-- `src/components/layout/Sidebar.tsx` — global settings and batch launch.
+Screens of D-0002 / ux-review §2, built on the UI API (`backend/api`, below):
+- `src/app/page.tsx` — Library: coverage matrix (video × wanted language), search, filters, select,
+  Start. `src/components/library/` — `LibraryTable`, `CoverageChip` (icon + text, never colour
+  alone), `VideoDetails` (subtitles found and why not counted, per-video overrides).
+- `src/app/settings/page.tsx` — the one language list (OV + ISO 639-1), `count_existing`; saved on change.
+- `src/components/shell/AppShell.tsx` — navigation, stub-mode banner, backend status.
+- `src/lib/api.gen.ts` — **generated** from the backend's OpenAPI (`npm run gen:types`); `types.ts`
+  only aliases it. Never hand-write a backend shape. `src/lib/api.ts` — REST client (every failure
+  throws the backend's sentence). `src/lib/events.ts` — the one `GET /api/events` stream.
+- `src/app/legacy/page.tsx` + `src/legacy/` — the previous dashboard on `/api/process`, kept whole
+  until the queue screen and the job store exist; delete both together then. A page module exports
+  only the page: the App Router fails `next build` on any other export (hence `legacy/lib/studio-context.tsx`).
 
 ### API contracts
 
@@ -180,6 +186,16 @@ and lost on restart.
 | `POST /api/process` | `{"status":"accepted","count":N}`, returns immediately. |
 | `GET /api/events/{file_id:path}` | SSE. `file_id` = full path, encoded **once**. |
 | `GET /health` | `{"status":"online"}`. |
+
+UI API (`backend/api`, models in `backend/api/schemas.py` = the contract; agreed with workspace-64, 2026-11-19).
+Videos are addressed by `LibraryVideo.id` (hash of the path), never by the path in a URL.
+
+| Route | Notes |
+|---|---|
+| `GET /api/library` | Every video under `SUBSTUDIO_MEDIA_ROOT` × every wanted language: `passed` (with origin) / `missing` / `pending` / `running` / `failed` / `unknown` (ffprobe failed). ffprobe cached by path+mtime+size. What counts as ours: `core/provenance.py`, the one rule. |
+| `GET/PUT /api/settings` | `{languages, count_existing}`, JSON under `SUBSTUDIO_STATE_DIR`, written atomically. |
+| `POST/GET /api/jobs`, `DELETE /api/jobs/{id}`, `GET /api/events`, `GET/PUT /api/subtitles/{id}/{lang}` | Stub only with `SUBSTUDIO_API_STUB=1`; otherwise 501 with the sentence the UI shows, until the job store implements the same models. `/api/events` is one SSE stream, frames discriminated by `kind` (`job`, `log` with the backend's `ts`, `library`). |
+| `GET /api/system` | `stub`, media root, CPU/RAM against the D-0001 budget. |
 
 **SSE frames are unnamed** — everything arrives on the default `message` event with a `type`
 discriminator of `"status"` or `"log"`. There is no `event:` line, so `addEventListener("transcribing", …)`
@@ -195,7 +211,10 @@ boolean, not a mode.
 
 `.env` (gitignored; template in `.env.example`): `GEMINI_API_KEY`, optional `GEMINI_MODEL`
 (default `gemini-3.8-flash`; must be a 3.x model because the request sends `thinkingLevel`),
-`NEXT_PUBLIC_MEDIA_PATH`, `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_LANGUAGES`, `WHISPER_MODEL`.
+`NEXT_PUBLIC_MEDIA_PATH`, `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_LANGUAGES` (legacy dashboard only),
+`WHISPER_MODEL`. UI API: `SUBSTUDIO_MEDIA_ROOT` (default `/data`), `SUBSTUDIO_STATE_DIR` (default
+`backend/state`, gitignored; never inside the library), `SUBSTUDIO_API_STUB=1` (simulated jobs,
+the UI shows a banner).
 Whisper models cache in the `whisper_model_cache` volume. Key at
 https://aistudio.google.com/apikey.
 
