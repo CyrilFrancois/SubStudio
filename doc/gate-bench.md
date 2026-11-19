@@ -23,7 +23,7 @@ Two traps found on the way, both fixed:
   each track with itself and read 0.0 on all 17. Audio-only it reads 0.39 s on S05E18 (gate: 0.33 s). The same default
   affects `core/acquire/align.py` (rung 2 re-timing): reported to its owner.
 - **A whole-file offset hides a jump inside an episode.** S05E21 reads +0.25 s overall, but +0.22 s on its first
-  third and −0.45 s on its last; the gate's drift check (offset of the second half minus the first) sees −0.78 s.
+  third and −0.45 s on its last; the gate's drift check (offset of the second half minus the first) sees −0.59 s (−0.78 s on faster-whisper 1.0.3).
 
 ## Result
 
@@ -34,17 +34,19 @@ Two traps found on the way, both fixed:
 
 Seeded faults: shifted +3 s and −1.5 s (offset), 25/23.976 frame-rate stretch (drift), cut at 60 % (coverage), tagged
 French (language), English asked as French (language), UTF-8 read as cp1252 (encoding), durations halved (reading
-speed). On the 16 good tracks the gate's offset and ffsubsync's whole-file offset differ by at most 0.11 s.
-Cost of a full run: 8.9 min, peak 2.4 threads, 0.29 GB (`bench/measure.py`), within D-0001.
+speed). On the 16 good tracks the gate's offset and ffsubsync's whole-file offset differ by at most 0.12 s.
+Cost of a full run: 10.4 min, peak 2.4 threads, 0.70 GB (`bench/measure.py`), within D-0001.
+**Re-checked on faster-whisper 1.2.1** (main's version since 2026-11-19; its Silero build gives slightly different
+spans): same verdicts, 17 / 17 and 128 / 128; numbers below are from that run, `bench/results/gate.jsonl`.
 
 ## The limits (`THRESHOLDS`, `backend/core/gate/verdict.py`)
 
 | Check | Limit | Good tracks measured | Why this value |
 |---|---|---|---|
-| \|offset\| | ≤ 500 ms | ≤ 330 ms | where a viewer starts to notice |
-| \|drift\| (second half − first) | ≤ 500 ms | ≤ 230 ms | S05E21: 780 ms; frame-rate faults: tens of seconds |
-| dialogue-cue time on speech | ≥ 75 % | 81–92 % | the spec's guessed 85 % rejected 5 good tracks |
-| speech covered (cue within 1 s) | ≥ 90 % | 98.1–100 % | a 60 % truncation gives ~60 % |
+| \|offset\| | ≤ 500 ms | ≤ 340 ms | where a viewer starts to notice |
+| \|drift\| (second half − first) | ≤ 500 ms | ≤ 240 ms | S05E21: 590 ms (ffsubsync, by thirds: 670 ms); frame-rate faults: tens of seconds |
+| dialogue-cue time on speech | ≥ 75 % | 83.5–92 % | the spec's guessed 85 % rejected 3 good tracks (5 on 1.0.3) |
+| speech covered (cue within 1 s) | ≥ 90 % | 98.2–100 % | a 60 % truncation gives ~60 % |
 | cues ≤ 35 cps | ≥ 95 % | 97.4–99.8 % | human captions: median 16–18 cps, 95th percentile 25–32: the guessed « 20 cps » rejected all 17 |
 | lines > 47 chars | ≤ 5 % | 0 % | |
 | broken characters | 0 | 0 | U+FFFD, UTF-8 read as cp1252, `?` inside a word |

@@ -48,7 +48,7 @@ measurement first, by a model only for what needs judgement (workspace rule: a c
 
 | Check | Measured how | Threshold |
 |---|---|---|
-| Synced | offset of the cues against detected speech (Silero VAD, 10 ms cross-correlation), its change between the two halves, share of dialogue-cue time on speech | **set on the bench:** \|offset\| ≤ 0.5 s, \|change\| ≤ 0.5 s, ≥ 75 % on speech (good human tracks: ≥ 81 %; the guessed 85 % rejected 5 of them) |
+| Synced | offset of the cues against detected speech (Silero VAD, 10 ms cross-correlation), its change between the two halves, share of dialogue-cue time on speech | **set on the bench:** \|offset\| ≤ 0.5 s, \|change\| ≤ 0.5 s, ≥ 75 % on speech (good human tracks: ≥ 83 %; the guessed 85 % rejected 3 of them) |
 | Right language | language identification on the cue text vs the language wanted; a track's tag, when present, must agree (a missing tag is no fault) | must match |
 | Complete | share of speech time with a cue within 1 s (no 10-minute gap while people talk) | **set on the bench:** ≥ 90 % (good tracks: ≥ 98 %) |
 | Readable | characters per second, line length, duplicated cues, valid encoding (no U+FFFD, no UTF-8 read as cp1252, no `?` inside a word) | **set on the bench:** ≤ 35 cps on 95 % of cues; the guessed 20 cps rejected every human broadcast caption (their 95th percentile is 25–32 cps) |

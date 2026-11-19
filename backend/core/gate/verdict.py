@@ -17,11 +17,11 @@ from .text import measure_text, missing_ids, untranslated
 
 THRESHOLDS = {
     # Set on the 17 text tracks of Ghosts S05 (16 in sync by ffsubsync on the whole file and on both ends, 1 drifting)
-    # and 128 seeded bad copies, 2026-11-19; doc/gate-bench.md has the numbers. In-sync tracks measured:
-    # |offset| ≤ 330 ms, |drift| ≤ 230 ms, on_speech ≥ 0.81, speech_covered ≥ 0.98, within_cps ≥ 0.97.
+    # and 128 seeded bad copies, 2026-11-19, re-checked on faster-whisper 1.2.1; doc/gate-bench.md has the numbers. In-sync tracks measured:
+    # |offset| ≤ 340 ms, |drift| ≤ 240 ms, on_speech ≥ 0.83, speech_covered ≥ 0.98, within_cps ≥ 0.97.
     "max_offset_ms": 500,        # |shift| a viewer starts to notice
-    "max_drift_ms": 500,         # change of offset between the two halves; S05E21 measures -780 (ffsubsync: -670)
-    "min_on_speech": 0.75,       # share of dialogue-cue time on detected speech; the spec's 0.85 rejected 5 good tracks
+    "max_drift_ms": 500,         # change of offset between the two halves; S05E21 measures -590 (ffsubsync: -670)
+    "min_on_speech": 0.75,       # share of dialogue-cue time on detected speech; the spec's 0.85 rejected 3-5 good tracks
     "min_speech_covered": 0.90,  # share of speech time with a cue within 1 s; a 60 % truncation gives ~0.6
     # Broadcast captions are near-verbatim: on the 17 Ghosts S05 tracks the median is 16-18 cps but the 95th
     # percentile is 25-32 cps (measured 2026-11-19), so the spec's « 20 cps » would reject every human track. 35 cps
