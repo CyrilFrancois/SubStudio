@@ -39,6 +39,40 @@ Vulkan iGPU 85.5 / 4.7. **The iGPU generates as fast and reads prompts 6× faste
 runs used 0.2–0.26 of a CPU on average), which is what « half the machine » asks for. Its memory is system RAM
 (UMA), so it still counts in the 7 GB.
 
+## Glossary bench (2026-11-19): can the translator be told the names?
+
+TranslateGemma's template takes only the text, so a glossary can reach it only by swapping each name for a token in
+Python and back after; Qwen3 can read the names in its prompt. Set: `opensubs_en_fr_names.jsonl`, the 93 cues of the
+1000-row OpenSubtitles set whose human reference keeps an English name verbatim (121 names, `make_names_set.py`);
+glossary = those names (an oracle: the best case for any glossary). Name accuracy by `names_score.py`, Q4_K_M,
+iGPU, batches of 10, `run_context.sh`.
+
+| Variant | chrF (names set) | Names kept | chrF (150 set) |
+|---|---|---|---|
+| TranslateGemma, no glossary | **58.7** | 115/121 (95 %) | **45.5** |
+| TranslateGemma, names swapped for `X0` tokens | 57.1 | 120/121 (99 %) | 44.8 (2 of 13 tokens lost) |
+| TranslateGemma, names swapped for `NAME0` tokens | 55.7 | 107/121 (88 %): « NAME » translated « NOM » | — |
+| Qwen3 4B, no glossary | 56.5 | 117/121 (97 %) | 44.3 |
+| Qwen3 4B, names in the system prompt | 57.2 | 120/121, the miss is « Mr » → « Monsieur » (correct French) | not run (parked) |
+| Qwen3 4B, names swapped for `X0` tokens | 55.7 | 121/121 | — |
+
+What it shows:
+- **Without a glossary TranslateGemma already keeps 95 % of names** and loses them only on words that are also
+  common nouns (« Canary » → « Canari », « Zen », « Oxy »). The headroom a glossary can buy is ~5 % of names.
+- **The swap costs French grammar:** the model translates around a token it cannot see. Per line against no
+  glossary (names set): 30 worse, 19 better, 36 identical. The losses are systematic: elision lost (« de Almawt »),
+  wrong preposition or article (« à Europe », « le Linette »), a comma inserted between two tokens of one name
+  (« Le, Péron », « Dr, Jaffe »), and a translatable proper noun left in English (« le Phantom Zone »). Two of these
+  (adjacent tokens of one name, elision after the swap back) are computable and could be fixed in Python **(not
+  built)**.
+- **Qwen3 with the names in its prompt ties TranslateGemma with the swap** (57.2 against 57.1) and keeps every real
+  name, without the grammar damage. It does not beat TranslateGemma **without** a glossary on chrF (58.7). Whether
+  it holds on general dialogue (150 set, variant 8 of `run_context.sh`) is not measured yet.
+
+**Verdict for now: no change.** TranslateGemma without a glossary stays the default: the swap buys 4 % of names
+for 0.7 to 1.6 chrF, and Qwen3 + prompt is a tie, not a win. Real context (episode summary, previous cues) is not
+in this bench.
+
 ## Decision
 
 **TranslateGemma 4B Q4_K_M, all layers on the integrated GPU, 10 cues per call as `id|text` lines.** Implemented
@@ -51,7 +85,8 @@ Why not the others:
   OpenSubtitles being in its training data **(hypothesis)**. (3) One sentence at a time, no glossary or context, which
   rung 3 of the user process needs. (4) CC-BY-NC weights. (5) It was not faster here.
 - **Qwen3 4B** is 1.2 chrF points behind, within the noise of 150 lines; it is the challenger once context is sent
-  (it follows instructions; TranslateGemma's template takes only the text).
+  (it follows instructions; TranslateGemma's template takes only the text). With a names glossary it ties, not wins
+  (« Glossary bench » above).
 - **HY-MT 1.8B** lost the id prefix on 2 of 15 batches and scores lowest on common cues.
 - **Q8_0** did not fit in the RAM free on this PC during the day; Q4_K_M is the default until a quiet-machine run shows
   Q8 fits and is worth +1.6 GB. The model card reports Q4_K_M matching bf16 on 47/74 sentences against 71/74 for Q8_0
@@ -86,6 +121,7 @@ Why not the others:
 ## What would reverse it
 
 - A re-bench **with context** (episode summary + glossary + previous cues, rung 3 of `doc/user-process.md`) where
-  Qwen3 4B or another model beats TranslateGemma on Ghosts episodes with good references.
+  Qwen3 4B or another model beats TranslateGemma on Ghosts episodes with good references. The names-only glossary
+  (2026-11-19) did not: a tie at best.
 - A quiet-machine run where Q8_0 fits within D-0001's 7 GB and gains clearly on the bench.
 - Cyril's blind preference on 20 cues going against the chrF ranking.
