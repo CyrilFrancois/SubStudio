@@ -58,6 +58,17 @@ def test_watch_name_matches_with_or_without_exe():
     assert norm_name("llama-server") == norm_name("llama-server.exe") == norm_name("LLAMA-SERVER.EXE")
 
 
+def test_processes_that_never_coexist_are_not_summed():
+    # Three children one after the other, each holding ~200 MB: the peak is one of them, not 600 MB.
+    child = ("import subprocess, sys\n"
+             "for _ in range(3):\n"
+             "    subprocess.run([sys.executable, '-c', "
+             "'import time; b = bytearray(200 * 1024 * 1024); b[::4096] = b\"x\" * len(b[::4096]); time.sleep(0.6)'])\n")
+    r = measure([sys.executable, "-c", child], interval=0.1)
+    assert r["exit_code"] == 0
+    assert 0.19 <= r["peak_rss_gb"] < 0.45
+
+
 def test_failed_command_keeps_its_exit_code():
     r = measure([sys.executable, "-c", "import sys; sys.exit(3)"], interval=0.1)
     assert r["exit_code"] == 3
