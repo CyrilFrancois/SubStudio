@@ -15,6 +15,7 @@ if not shutil.which("ffmpeg"):
 
 import main  # noqa: E402
 from core.events import event_manager  # noqa: E402
+from core.provenance import is_substudio_track  # noqa: E402
 
 # Cue 3 starts after the 3-second clip ends and must not reach the MKV.
 SIDECAR = ("1\n00:00:00,500 --> 00:00:01,200\nBonjour Hélène.\n\n"
@@ -61,6 +62,8 @@ def test_sidecar_to_mkv_keeps_timings_accents_and_clips_past_the_end(clip):
     probe = json.loads(subprocess.run(["ffprobe", "-v", "error", "-print_format", "json", "-show_streams",
                                        "-select_streams", "s", str(out)], capture_output=True, text=True).stdout)
     assert [s["tags"].get("language") for s in probe["streams"]] == ["fra"]
+    title = probe["streams"][0]["tags"].get("title")
+    assert title == "SubStudio fr" and is_substudio_track(kind="embedded", title=title)
     track = subprocess.run(["ffmpeg", "-v", "error", "-i", str(out), "-map", "0:s:0", "-f", "srt", "-"],
                            capture_output=True).stdout.decode("utf-8").replace("\r\n", "\n")
     assert "00:00:00,750 --> 00:00:01,450\n[fr] BONJOUR HÉLÈNE." in track          # +0.25 s sync, accents kept
@@ -81,6 +84,17 @@ def test_a_language_that_cannot_be_translated_fails_the_video_and_writes_nothing
     assert status["status"] == "error" and "fr:" in status["message"], status
     assert not (clip.parent / f"{clip.stem}_SubStudio.mkv").exists()
     assert not clip.with_suffix(".fr.srt").exists()
+
+
+def test_a_language_the_muxer_cannot_title_fails_before_any_work(clip):
+    called = []
+    class Spy(Upper):
+        def translate(self, cues, target, context):
+            called.append(target)
+            return super().translate(cues, target, context)
+    status = run(clip, Spy(), out=("fre",))
+    assert status["status"] == "error" and "fre" in status["message"], status
+    assert called == []
 
 
 def test_a_later_language_failing_leaves_no_earlier_language_on_disk(clip):

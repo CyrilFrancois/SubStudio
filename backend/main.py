@@ -17,6 +17,7 @@ from core.transcriber import VideoTranscriber
 from core.translator import GeminiTranslator
 from core.subtitles import TranslationContext, load_file, parse, shift, to_srt, translate_cues, wrap_lines
 from core.muxer import VideoMuxer
+from core.provenance import substudio_track_title
 from core.events import event_manager, setup_logging_bridge
 from core.jobs import job_registry, JobAborted
 
@@ -110,6 +111,11 @@ class PipelineOrchestrator:
         logger.info(f"{p} STARTING: {video.name}")
 
         try:
+            # A language the muxer cannot title must fail now, not after a 40-minute transcription.
+            if opts.muxIntoMkv:
+                for lang_code in video.out:
+                    substudio_track_title(lang_code.lower())
+
             # STEP 1: CONTEXT
             job.raise_if_aborted()
             event_manager.emit(fid, "processing", 5, f"{p} Step 1/5: Analyzing context...")
