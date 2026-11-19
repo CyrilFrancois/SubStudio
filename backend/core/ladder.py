@@ -112,7 +112,10 @@ class Ladder:
     async def _download(self, langs: List[str]) -> None:
         self.deps.progress("processing", 12, f"Searching online for {', '.join(l.upper() for l in langs)} subtitles...")
         try:
-            result = await asyncio.to_thread(self.deps.fetch, self.run.path, langs, work_dir_for(self.run.path))
+            # The video as it is now (renamed « X (Sub-…).mkv » after a swap, when a retry searches again); the work
+            # folder stays keyed on the queued path so a retry finds the same one.
+            video_now = self.run.output_path or self.run.path
+            result = await asyncio.to_thread(self.deps.fetch, video_now, langs, work_dir_for(self.run.path))
         except JobAborted:
             raise
         except ProvidersUnavailable:

@@ -193,3 +193,16 @@ def test_first_pass_never_searches_twice():
     run, ladder, _, fetches = make(["fr"], original="en")
     go(run, ladder)
     assert fetches == [["en", "fr"]]
+
+
+def test_retry_searches_with_the_video_as_it_is_now(monkeypatch):
+    # After the in-place swap the file is « X (Sub-EN).mkv »: a search on the old name would find no file.
+    run, ladder, _, _ = make(["fr"], original="en", fetched=FetchResult({}, frozenset({"gestdown"})))
+    go(run, ladder)
+    run.output_path = "v (Sub-EN).mkv"
+    retry, _ = _retry(run, FetchResult({}), monkeypatch)
+    seen = []
+    retry.deps.fetch = lambda path, langs, work_dir: seen.append(path) or FetchResult({})
+    run.cells["fr"].state = CellState.PENDING
+    asyncio.run(retry.fill("fr"))
+    assert seen == ["v (Sub-EN).mkv"]
