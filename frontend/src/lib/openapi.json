@@ -520,6 +520,12 @@
             "description": "For 'ov': the audio's language when known ('en'); else equals language.",
             "title": "Resolved"
           },
+          "reviewed": {
+            "default": false,
+            "description": "Set when state is 'passed' and a person saved this subtitle in Review.",
+            "title": "Reviewed",
+            "type": "boolean"
+          },
           "rung": {
             "anyOf": [
               {
@@ -1019,6 +1025,12 @@
             ],
             "description": "One sentence when counted is false, e.g. 'not made by this SubStudio (Settings)'.",
             "title": "Reason"
+          },
+          "reviewed": {
+            "default": false,
+            "description": "A person saved it in the Review screen (SUBSTUDIO_REVIEWED tag, core/provenance).",
+            "title": "Reviewed",
+            "type": "boolean"
           },
           "stream_index": {
             "anyOf": [

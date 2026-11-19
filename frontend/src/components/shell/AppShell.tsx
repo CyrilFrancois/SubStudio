@@ -4,7 +4,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { AlertTriangle, Library, ListOrdered, Settings, History, Server, ServerOff } from 'lucide-react';
+import { AlertTriangle, Library, ListOrdered, Settings, Server, ServerOff } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
 import type { SystemStatus } from '@/lib/types';
 
@@ -52,16 +52,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               </li>
             );
           })}
-          <li className="pt-4 mt-4 border-t border-white/5">
-            <Link
-              href="/legacy"
-              title="The previous dashboard, kept until the Review screen replaces its last uses"
-              className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-colors ${
-                path.startsWith('/legacy') ? 'bg-white/5 text-gray-200' : 'text-gray-500 hover:text-gray-300'}`}
-            >
-              <History size={14} /> Old dashboard
-            </Link>
-          </li>
         </ul>
         <div className="px-5 py-4 border-t border-white/5 text-xs space-y-1.5">
           {down ? (
