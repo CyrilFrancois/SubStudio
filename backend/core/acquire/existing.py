@@ -8,7 +8,7 @@ from dataclasses import replace
 from typing import Callable, Dict, List, Optional, Tuple
 
 from ..jobs import JobAborted
-from ..provenance import is_substudio_track
+from ..provenance import FROM_TAG, UNTRANSLATED_TAG, is_substudio_track, parse_cue_ids
 from ..subtitle_processor import TEXT_SUBTITLE_CODECS
 from ..subtitles import Cue, detect_language, load_file, shift
 from .plan import normalize_language
@@ -41,10 +41,13 @@ def find_existing(video_path: str) -> List[ExistingSub]:
     for i, s in enumerate(_probe(video_path, "s")):
         tags = s.get("tags") or {}
         title = tags.get("title")
+        ours = is_substudio_track(kind="embedded", title=title)
+        upper = {k.upper(): v for k, v in tags.items()}   # Matroska keeps a tag's case as written; read it either way
         found.append(ExistingSub(
             language=normalize_language(tags.get("language")), kind="embedded", ref=str(i),
-            text=(s.get("codec_name") or "").lower() in TEXT_SUBTITLE_CODECS,
-            marked=is_substudio_track(kind="embedded", title=title)))
+            text=(s.get("codec_name") or "").lower() in TEXT_SUBTITLE_CODECS, marked=ours,
+            untranslated=tuple(parse_cue_ids(upper.get(UNTRANSLATED_TAG))) if ours else (),
+            from_language=normalize_language(upper.get(FROM_TAG)) if ours else None))
     folder, stem = os.path.dirname(video_path), os.path.splitext(os.path.basename(video_path))[0]
     for sub in _SIDECAR_DIRS:
         d = os.path.join(folder, sub)
