@@ -40,6 +40,7 @@ def write_run(run: VideoRun, job: Optional[JobHandle] = None) -> Optional[Output
         [c.language for c in passed],
         origins={c.language: c.origin.kind() for c in new},
         reviewed={c.language for c in new if c.reviewed},
+        audio_language=run.audio_tag,
         job=job,
     )
     if result.status == "updated":

@@ -386,3 +386,43 @@ def test_library_and_pipeline_share_the_rejected_value():
     from api import library
     from core import provenance
     assert library.REJECTED is provenance.REJECTED
+
+
+# ---------------------------------------------------------------- the OV audio tag
+
+def _audio_tag(path: Path):
+    a = [s for s in media._probe(path)["streams"] if s["codec_type"] == "audio"][0]
+    return a.get("tags", {}).get("language")
+
+
+def test_untagged_audio_gets_the_detected_language(tmp_path):
+    src = _mkv_with_sdh(tmp_path)
+    assert _audio_tag(src) in (None, "und")                    # the fixture's audio really is untagged
+    result = _upd(src, {"fr": FR}, ["en", "fr"], audio_language="en")
+    assert _audio_tag(result.path) == "eng"                    # ISO 639-2, as the library and players read it
+
+
+def test_tagged_audio_is_never_retagged(tmp_path):
+    srt = tmp_path / "sdh.srt"
+    srt.write_text(SRT, encoding="utf-8")
+    src = tmp_path / "Film.mkv"
+    ffmpeg(*_SRC, "-map", "0:v", "-map", "1:a", *_AV, "-metadata:s:a:0", "language=fre", str(src))
+    result = _upd(src, {"en": EN}, ["en"], audio_language="en")
+    assert _audio_tag(result.path) == "fre"
+
+
+def test_the_audio_tag_alone_never_touches_a_video(tmp_path):
+    src = _mkv_with_sdh(tmp_path)
+    before = _sha(src)
+    assert _upd(src, {}, ["en"], audio_language="en").status == "untouched"
+    assert _sha(src) == before and _audio_tag(src) in (None, "und")
+
+
+def test_write_run_tags_the_audio_with_what_the_run_detected(tmp_path):
+    from core.acquire.types import Rung
+    from core.cells import Cell, CellState, Origin, VideoRun
+    from core.output import write_run
+    src = _mkv_with_sdh(tmp_path)
+    run = VideoRun(path=str(src), cells={"fr": Cell("fr", CellState.PASSED, Origin(Rung.TRANSLATE, "en"), cues=FR)})
+    run.audio_tag = "en"
+    assert _audio_tag(write_run(run).path) == "eng"

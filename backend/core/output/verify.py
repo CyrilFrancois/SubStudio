@@ -25,10 +25,14 @@ def _decoded_cue_count(path: Path, sub_index: int) -> int:
 
 
 def _verify(source_info: dict, tmp: Path, expected: Dict[str, int], origins: Optional[Mapping[str, str]] = None,
-            reviewed: Collection[str] = ()) -> None:
-    """The check the swap depends on. Raises OutputError on the first difference."""
+            reviewed: Collection[str] = (), audio_tag: Optional[str] = None) -> None:
+    """The check the swap depends on. Raises OutputError on the first difference. With `audio_tag`, the first audio
+    stream must now carry that language and nothing else of the audio may differ."""
     out = _probe(tmp)
     before, after = _signature(source_info), _signature(out)
+    if audio_tag and before["audio"]:
+        codec, _, flags = before["audio"][0]
+        before["audio"][0] = (codec, audio_tag, flags)
     for part in before:
         if before[part] != after[part]:
             raise OutputError(f"the new file's {part} differ from the source ({after[part]} vs {before[part]})")

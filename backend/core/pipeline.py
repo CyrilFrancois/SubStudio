@@ -30,6 +30,9 @@ from .translators import make_translator
 
 # /data inside Docker; set SUBSTUDIO_MEDIA_ROOT (e.g. C:/Videos) when the backend runs natively.
 MEDIA_ROOT = os.getenv("SUBSTUDIO_MEDIA_ROOT", "/data")
+# How sure the spoken-language detection must be before SubStudio trusts it: for a transcript's language, and for
+# the tag it writes on an untagged audio stream (a wrong tag would make « OV » name the wrong language for good).
+OV_TAG_MIN_PROBABILITY = 0.9
 
 logger = logging.getLogger("SubStudio.Pipeline")
 
@@ -142,7 +145,10 @@ class PipelineOrchestrator:
                 video_path=str(current_path(run)), file_id=run.path, on_progress=event_manager.emit,
                 current_file=index + 1, total_files=total, model_size=opts.transcriptionEngine, job=job)
             # Whisper hears the language; text detection only guesses it. Trusted when Whisper is sure.
-            return asr.to_cues(), (asr.language if asr.language_probability >= 0.9 else None)
+            sure = asr.language_probability >= OV_TAG_MIN_PROBABILITY
+            if sure and run.audio_tag is None:
+                run.audio_tag = asr.language
+            return asr.to_cues(), (asr.language if sure else None)
 
         return Ladder(run, LadderDeps(
             translator=self.translator, transcribe=transcribe,
@@ -286,6 +292,8 @@ class PipelineOrchestrator:
                 # Untagged audio: Whisper identifies the language on a sample, without a full transcription.
                 original, prob = await asyncio.to_thread(self.transcriber.detect_video_language, video.path, job)
                 logger.info(f"{p} OV detected as {original} (probability {prob:.2f})")
+                if prob >= OV_TAG_MIN_PROBABILITY:
+                    run.audio_tag = original    # written on the untagged audio by the swap (core/output)
             plans = plan(video.out, existing, original, downloads_enabled=self.downloads_enabled)
             run.plans = {lp.language: lp for lp in plans}
             run.cells = {lp.language: Cell(lp.language) for lp in plans if not lp.source_only}
