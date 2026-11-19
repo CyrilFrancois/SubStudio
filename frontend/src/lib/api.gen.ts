@@ -373,6 +373,12 @@ export interface components {
              */
             resolved?: string | null;
             /**
+             * Reviewed
+             * @description Set when state is 'passed' and a person saved this subtitle in Review.
+             * @default false
+             */
+            reviewed?: boolean;
+            /**
              * Rung
              * @description Set when known (from the job's cell verdict).
              */
@@ -614,6 +620,12 @@ export interface components {
              * @description One sentence when counted is false, e.g. 'not made by this SubStudio (Settings)'.
              */
             reason?: string | null;
+            /**
+             * Reviewed
+             * @description A person saved it in the Review screen (SUBSTUDIO_REVIEWED tag, core/provenance).
+             * @default false
+             */
+            reviewed?: boolean;
             /**
              * Stream Index
              * @description ffprobe stream index, embedded tracks only.
