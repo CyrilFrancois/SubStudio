@@ -52,7 +52,29 @@ class BatchMismatch(ValueError):
     """The backend answered, but not with exactly one non-empty text per id it was sent."""
 
 
-def _check(sent: List[CueText], got: object) -> Dict[int, str]:
+# A line of three words or more that comes back identical was not translated. Shorter lines (« OK », « John! ») may
+# legitimately stay the same, so they never count.
+_ECHO_MIN_WORDS = 3
+# Measured 2026-11-19 on 3,323 English cues of 6 Ghosts S05 episodes: 89 % have 3+ words, 0.2 % carry ♪.
+# Hypothesis, to set once the bench has human FR/EN pairs: a real translation leaves far under 1 in 10 unchanged.
+MAX_ECHO_SHARE = 0.10
+MIN_ECHO_SENTENCES = 10
+
+
+def _norm(text: str) -> str:
+    return " ".join(text.split()).casefold()
+
+
+def _is_sentence(text: str) -> bool:
+    # Song lyrics (♪) are often left untranslated by human translators too: they never count.
+    return len(text.split()) >= _ECHO_MIN_WORDS and "♪" not in text
+
+
+def _is_echo(source: str, answer: str) -> bool:
+    return _is_sentence(source) and _norm(source) == _norm(answer)
+
+
+def _check(sent: List[CueText], got: object, check_echo: bool = True) -> Dict[int, str]:
     if not isinstance(got, list):
         raise BatchMismatch(f"expected a list, got {type(got).__name__}")
     want = [c["id"] for c in sent]
@@ -69,6 +91,12 @@ def _check(sent: List[CueText], got: object) -> Dict[int, str]:
     empty = [i for i in want if not out[i]]
     if empty:
         raise BatchMismatch(f"empty text for ids {empty[:5]}")
+    if check_echo:
+        long_lines = [c for c in sent if _is_sentence(c["text"])]
+        echoed = [c["id"] for c in long_lines if _is_echo(c["text"], out[c["id"]])]
+        # Two or more, and at least half the batch's real sentences: the model sent the source back.
+        if len(echoed) >= 2 and len(echoed) * 2 >= len(long_lines):
+            raise BatchMismatch(f"{len(echoed)} lines returned untranslated (ids {echoed[:5]})")
     return out
 
 
@@ -99,6 +127,8 @@ def translate_cues(
     done = 0
 
     position = {c.id: i for i, c in enumerate(cues)}
+    # Translating into the source language legitimately returns the same text.
+    check_echo = not (context.source_lang and context.source_lang.lower() == target.lower())
 
     def call(batch: List[Cue]) -> Dict[int, str]:
         sent: List[CueText] = [{"id": c.id, "text": c.text} for c in batch]
@@ -110,7 +140,7 @@ def translate_cues(
                 check_abort()
             try:
                 # A backend may raise BatchMismatch itself (e.g. unparseable JSON): same budget as a wrong answer.
-                return _check(sent, translator.translate(sent, target, ctx))
+                return _check(sent, translator.translate(sent, target, ctx), check_echo)
             except BatchMismatch as e:
                 mismatches += 1
                 logger.warning(f"{translator.name} answered cues {batch[0].id}-{batch[-1].id} wrongly: {e}")
@@ -145,5 +175,13 @@ def translate_cues(
 
     for i in range(0, len(cues), size):
         run(cues[i:i + size])
+
+    if check_echo:
+        long_lines = [c for c in cues if _is_sentence(c.text)]
+        echoed = [c.id for c in long_lines if _is_echo(c.text, texts[c.id])]
+        # Under MIN_ECHO_SENTENCES there is too little text to tell an echo from lines that stay the same.
+        if len(long_lines) >= MIN_ECHO_SENTENCES and len(echoed) > MAX_ECHO_SHARE * len(long_lines):
+            raise TranslationFailed(f"{target}: {len(echoed)} of {len(long_lines)} sentences came back in the source "
+                                    f"language (first ids {echoed[:5]})")
 
     return [replace(c, text=texts[c.id]) for c in cues]

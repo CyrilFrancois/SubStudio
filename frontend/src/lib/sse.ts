@@ -1,14 +1,27 @@
-// sse.ts — EventSource wrapper for GET /api/events/{file_id}. Exports: SSEEvent, createSSEConnection.
+// sse.ts — EventSource wrapper for GET /api/events/{file_id}. Exports: SSEEvent, CellVerdict, createSSEConnection.
 
-export type SSEEvent = {
-  type: 'status' | 'log';
-  fileId: string;
-  /** Status description, or the log line for type 'log'. */
-  message: string;
-  status?: string;
-  progress?: number;
-  level?: string;
+/** One video × language and its verdict (backend core/cells.py Cell.to_json, D-0002). */
+export type CellVerdict = {
+  language: string;
+  state: 'pending' | 'running' | 'passed' | 'failed';
+  /** "kept", "downloaded", "translated from en", "transcribed"…; null until decided. */
+  origin: string | null;
+  rung: 'existing' | 'download' | 'translate' | 'asr' | null;
+  /** One sentence, only when failed. */
+  reason: string;
 };
+
+export type SSEEvent =
+  | {
+      type: 'status' | 'log';
+      fileId: string;
+      /** Status description, or the log line for type 'log'. */
+      message: string;
+      status?: string;
+      progress?: number;
+      level?: string;
+    }
+  | { type: 'cells'; fileId: string; cells: CellVerdict[] };
 
 /**
  * Opens the progress stream for one file.
