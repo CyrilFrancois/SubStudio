@@ -35,6 +35,14 @@ class TranslationContext:
     source_lang: Optional[str] = None                    # ISO 639-1 when known
     source_is_asr: bool = False                          # machine-transcribed: may hold phonetic errors
     previous: Sequence[str] = field(default_factory=tuple)  # source texts just before this batch, for continuity
+    # Looked up, never invented (core/context, doc/user-process.md §2 rung 3); empty when unknown.
+    series: str = ""                                     # e.g. "Ghosts (2021)"
+    season: Optional[int] = None
+    episode: Optional[int] = None
+    episode_title: str = ""
+    summary: str = ""                                    # plain text, from the lookup source
+    missing: str = ""                                    # one sentence: what could not be looked up, and why
+    attribution: str = ""                                # e.g. "TVmaze (CC BY-SA)": the source's licence asks for it
 
 
 class Translator(Protocol):

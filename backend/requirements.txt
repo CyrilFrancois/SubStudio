@@ -25,6 +25,8 @@ jinja2==3.1.6
 
 # Subtitle ladder (core/acquire): free providers, then re-timing to the audio
 subliminal==2.8.0
+# Context: guessit reads title/season/episode from the file name (core/context); also a subliminal dependency
+guessit==4.5.3
 ffsubsync==0.5.1
 
 # System & Utilities

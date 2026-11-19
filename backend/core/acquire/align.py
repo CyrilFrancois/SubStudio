@@ -48,6 +48,11 @@ def align(reference: str, subtitle_path: str, output_path: str, timeout_s: int =
         raise AlignError("ffmpeg is not on PATH: cannot read the video's audio")
     cmd = [sys.executable, "-c", _CHILD, reference, "-i", subtitle_path, "-o", output_path,
            "--skip-sync-on-low-quality", "--output-encoding", "utf-8"]
+    if not reference.lower().endswith((".srt", ".ass", ".ssa", ".vtt")):
+        # ffsubsync's default detector (`subs_then_webrtc`) takes the video's own subtitle track first, when it has
+        # one: a download was then re-timed to that track (maybe a bad one), never to the speech (workspace-29,
+        # Ghosts S05E18, 2026-11-19). The audio is the truth: always detect speech in it.
+        cmd += ["--vad", "webrtc"]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
                               timeout=timeout_s)
