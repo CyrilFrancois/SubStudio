@@ -79,9 +79,10 @@ def test_each_language_gets_its_own_verdict_and_origin(clip):
     finally:
         restore()
     cells = {c["language"]: c for c in orch.runs[str(clip)].to_json()}
-    assert cells["en"] == {"language": "en", "state": "passed", "origin": "kept", "rung": "existing", "reason": "",
-                           "attempts": []}
-    assert cells["de"]["state"] == "passed" and cells["de"]["origin"] == "translated from en"
+    assert cells["en"] == {"language": "en", "state": "passed", "origin": "kept", "from_language": None,
+                           "origin_label": "kept", "rung": "existing", "reason": "", "attempts": []}
+    assert cells["de"]["state"] == "passed" and cells["de"]["origin_label"] == "translated from en"
+    assert (cells["de"]["origin"], cells["de"]["from_language"]) == ("translated", "en")
     assert cells["fr"]["state"] == "failed" and cells["fr"]["reason"].startswith("fr: tag cannot translate cue")
     assert orch.translator.calls.count("en") == 0          # already English: kept, never sent to a model
     assert [c["state"] for c in seen[0]] == ["pending"] * 3 and seen[-1] == list(cells.values())
@@ -193,4 +194,5 @@ def test_a_transcription_uses_the_language_whisper_heard(tmp_path):
     asyncio.run(orch.execute_pipeline(job, main.GlobalOptions(generateSRT=True, muxIntoMkv=False), 0, 1))
     cells = {c["language"]: c for c in orch.runs[str(video)].to_json()}
     assert cells["en"]["origin"] == "transcribed" and orch.translator.calls == ["de"]
-    assert cells["de"]["origin"] == "transcribed, translated from en"
+    assert cells["de"]["origin_label"] == "transcribed, translated from en"
+    assert (cells["en"]["origin"], cells["de"]["origin"], cells["de"]["from_language"]) == ("transcribed", "translated", "en")

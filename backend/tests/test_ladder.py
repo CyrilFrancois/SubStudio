@@ -72,7 +72,7 @@ def test_unmarked_existing_is_ignored_then_download_then_translate_from_ov(monke
     cells = go(run, ladder)
     assert fetches == [["en", "fr"]]                       # one search for every missing language
     assert cells["en"]["origin"] == "downloaded" and cells["en"]["attempts"] == ["existing: ignored: en embedded"]
-    assert cells["fr"]["origin"] == "translated from en"
+    assert cells["fr"]["origin_label"] == "translated from en"
     assert cells["fr"]["attempts"] == ["download: none found online"]
     assert asr == []                                       # a human subtitle existed: no transcription
 
@@ -90,7 +90,7 @@ def test_unsynced_download_falls_through_with_its_reason():
     cells = go(run, ladder)
     assert cells["fr"]["attempts"][:2] == ["download: found, but it could not be matched to the audio",
                                           "translate: no good subtitle in another language"]
-    assert cells["fr"]["origin"] == "transcribed, translated from en" and asr == [1]
+    assert cells["fr"]["origin_label"] == "transcribed, translated from en" and asr == [1]
 
 
 def test_missing_language_says_which_sites_were_unreachable():
@@ -102,13 +102,13 @@ def test_missing_language_says_which_sites_were_unreachable():
 def test_transcription_runs_once_for_every_language():
     run, ladder, asr, _ = make(["de", "fr"], downloads=False)
     cells = go(run, ladder)
-    assert asr == [1] and {c["origin"] for c in cells.values()} == {"transcribed, translated from en"}
+    assert asr == [1] and {(c["origin"], c["from_language"]) for c in cells.values()} == {("translated", "en")}
 
 
 def test_unlabelled_user_pick_is_still_a_translation_source():
     run, ladder, asr, _ = make(["fr"], downloads=False, unlabelled=cues(["Hi!"]))
     cells = go(run, ladder)
-    assert cells["fr"]["origin"] == "translated from unknown language" and asr == []
+    assert cells["fr"]["origin_label"] == "translated from unknown language" and asr == []
 
 
 def test_untagged_text_track_is_labelled_by_its_text():

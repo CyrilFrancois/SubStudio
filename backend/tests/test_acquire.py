@@ -216,3 +216,47 @@ class FetchBranches(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(__import__("shutil").which("ffmpeg"), "ffmpeg not on PATH")
+class AlignToTheAudio(unittest.TestCase):
+    """A video that already carries a (wrong) subtitle track: the download must be re-timed to the SPEECH."""
+
+    def test_reference_is_the_audio_not_the_embedded_track(self):
+        import subprocess
+        import wave
+        import numpy as np
+        d = tempfile.mkdtemp(prefix="substudio-vad-")
+        rate, rnd = 16000, random.Random(3)
+        spans, t = [], 1.5
+        for _ in range(40):
+            dur = rnd.uniform(0.8, 2.2)
+            spans.append((t, t + dur))
+            t += dur + rnd.uniform(0.6, 2.5)
+        total = t + 2
+        x = np.arange(int(total * rate)) / rate
+        voice = sum(np.sin(2 * np.pi * 140 * k * x) / k for k in range(1, 12)) * (0.6 + 0.4 * np.sin(2 * np.pi * 4 * x))
+        gate = np.zeros_like(x)
+        for a, b in spans:
+            gate[int(a * rate):int(b * rate)] = 1.0
+        pcm = (voice * gate / np.abs(voice).max() * 0.6 * 32767).astype("<i2")
+        wav = os.path.join(d, "speech.wav")
+        with wave.open(wav, "wb") as w:
+            w.setnchannels(1), w.setsampwidth(2), w.setframerate(rate), w.writeframes(pcm.tobytes())
+
+        def srt(path, shift_ms):
+            s = pysubs2.SSAFile()
+            for i, (a, b) in enumerate(spans):
+                s.append(pysubs2.SSAEvent(start=int(a * 1000) + shift_ms, end=int(b * 1000) + shift_ms, text=f"l{i}"))
+            s.save(path)
+        srt(os.path.join(d, "embedded.srt"), 2000)       # the file's own track: 2 s late
+        srt(os.path.join(d, "download.srt"), 3000)       # the download: 3 s late
+        video = os.path.join(d, "clip.mkv")
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", f"color=c=black:s=160x120:d={total}",
+                        "-i", wav, "-i", os.path.join(d, "embedded.srt"), "-map", "0:v", "-map", "1:a", "-map", "2:s",
+                        "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-c:s", "srt", "-shortest", video],
+                       check=True)
+        r = align(video, os.path.join(d, "download.srt"), os.path.join(d, "out.srt"))
+        # Speech-based: −3 s. Matched to the embedded track instead, it would read −1 s.
+        self.assertTrue(r.synced)
+        self.assertAlmostEqual(r.offset_seconds, -3.0, delta=0.3)

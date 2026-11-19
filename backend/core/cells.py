@@ -32,6 +32,17 @@ class Origin:
     rung: Rung
     from_language: Optional[str] = None  # the source language a translation started from, when known
 
+    def kind(self) -> str:
+        """The origin as one of provenance.ORIGINS: a transcript translated into another language is « translated »
+        (from_language says from what), a transcript kept in its own language is « transcribed »."""
+        if self.rung == Rung.EXISTING:
+            return "kept"
+        if self.rung == Rung.DOWNLOAD:
+            return "downloaded"
+        if self.rung == Rung.ASR and self.from_language is None:
+            return "transcribed"
+        return "translated"
+
     def label(self) -> str:
         if self.rung == Rung.EXISTING:
             return "kept"
@@ -64,9 +75,12 @@ class Cell:
     attempts: List[str] = field(default_factory=list)
 
     def to_json(self) -> dict:
+        o = self.origin
         return {"language": self.language, "state": self.state.value,
-                "origin": self.origin.label() if self.origin else None,
-                "rung": self.origin.rung.value if self.origin else None, "reason": self.reason,
+                "origin": o.kind() if o else None,                 # one of provenance.ORIGINS, for the Library
+                "from_language": o.from_language if o else None,
+                "origin_label": o.label() if o else None,          # the sentence shown to a person
+                "rung": o.rung.value if o else None, "reason": self.reason,
                 "attempts": list(self.attempts)}
 
     def summary(self) -> str:

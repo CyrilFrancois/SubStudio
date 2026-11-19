@@ -55,7 +55,7 @@ class VideoJob(BaseModel):
     stripExistingSubs: bool = False
 
 class GlobalOptions(BaseModel):
-    transcriptionEngine: str = "turbo"
+    transcriptionEngine: Optional[str] = None  # None: the transcriber's own default model (turbo)
     generateSRT: bool = True
     muxIntoMkv: bool = True
     cleanUp: bool = False
@@ -109,8 +109,6 @@ class PipelineOrchestrator:
             event_manager.emit(video.path, "queued", 0, "Queued")
 
         try:
-            # We no longer re-init self.transcriber here.
-            # The lazy-loader inside transcriber.py handles the swap.
             for idx, video in enumerate(queued):
                 await self.execute_pipeline(video, opts, idx, len(queued))
         finally:
