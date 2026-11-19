@@ -16,14 +16,14 @@ from typing import Dict, List, Optional, Any, Set
 from core.scanner import VideoScanner
 from core.transcriber import VideoTranscriber
 from core.translator import GeminiTranslator
-from core.subtitles import TranslationContext, to_srt, wrap_lines
+from core.subtitles import TranslationContext, wrap_lines
 from core.cells import Cell, CellState, VideoRun
 from core.acquire import plan
 from core.acquire.existing import audio_language, find_existing, label_by_text, picked_sidecar
 from core.acquire.plan import OV_TAGS
 from core.ladder import Ladder, LadderDeps
 from core.subtitle_processor import SubtitleProcessor
-from core.muxer import VideoMuxer
+from core.output import current_path, write_run
 from core.provenance import substudio_track_title
 from core.events import event_manager, setup_logging_bridge
 from core.jobs import job_registry, JobAborted
@@ -56,9 +56,7 @@ class VideoJob(BaseModel):
 
 class GlobalOptions(BaseModel):
     transcriptionEngine: Optional[str] = None  # None: the transcriber's own default model (turbo)
-    generateSRT: bool = True
-    muxIntoMkv: bool = True
-    cleanUp: bool = False
+    # generateSRT / muxIntoMkv / cleanUp are gone (D-0002 §4): the video itself is updated by the verified swap.
 
 class ProcessRequest(BaseModel):
     videos: List[VideoJob]
@@ -71,7 +69,6 @@ class PipelineOrchestrator:
         self.scanner = VideoScanner(base_path=MEDIA_ROOT)
         self.transcriber = VideoTranscriber()
         self.translator = GeminiTranslator()
-        self.muxer = VideoMuxer()
         self.processor = SubtitleProcessor()
         # Rung 2 asks subtitle sites over the network; SUBSTUDIO_DOWNLOADS=0 keeps a run (or the tests) offline.
         self.downloads_enabled = os.getenv("SUBSTUDIO_DOWNLOADS", "1") != "0"
@@ -117,16 +114,17 @@ class PipelineOrchestrator:
 
     def _ladder(self, run: VideoRun, video: "VideoJob", opts: "GlobalOptions", job, p: str, index: int, total: int,
                 preloaded: Optional[Dict[str, list]] = None, unlabelled: Optional[list] = None) -> Ladder:
+        # A retry reads the video where it is NOW: after a swap it carries its (Sub-…) name, not video.path.
         def transcribe():
             asr = self.transcriber.transcribe(
-                video_path=video.path, file_id=run.path, on_progress=event_manager.emit,
+                video_path=str(current_path(run)), file_id=run.path, on_progress=event_manager.emit,
                 current_file=index + 1, total_files=total, model_size=opts.transcriptionEngine, job=job)
             # Whisper hears the language; text detection only guesses it. Trusted when Whisper is sure.
             return asr.to_cues(), (asr.language if asr.language_probability >= 0.9 else None)
 
         return Ladder(run, LadderDeps(
             translator=self.translator, transcribe=transcribe,
-            load_embedded=lambda i: self.processor.extract_embedded_subs(video.path, i, job=job),
+            load_embedded=lambda i: self.processor.extract_embedded_subs(str(current_path(run)), i, job=job),
             downloads_enabled=self.downloads_enabled, count_existing=self.count_existing,
             preloaded=preloaded or {}, unlabelled=unlabelled, check_abort=job.raise_if_aborted,
             progress=lambda status, pct, msg: event_manager.emit(run.path, status, pct, f"{p} {msg}")))
@@ -161,29 +159,13 @@ class PipelineOrchestrator:
             logger.error(f"❌ {p} {cell.summary()}")
         event_manager.emit_cells(run.path, run.to_json())
 
-    async def _write_outputs(self, run: VideoRun, video: "VideoJob", opts: "GlobalOptions", job, p: str,
-                             index: int, total: int):
-        passed = run.passed()
-        if not passed:
-            return
-        if opts.generateSRT:
-            for lang_code, cues in passed.items():
-                with open(Path(run.path).with_suffix(f".{lang_code}.srt"), "w", encoding="utf-8") as f:
-                    f.write(to_srt(cues))
-        if opts.muxIntoMkv:
-            job.raise_if_aborted()
-            event_manager.emit(run.path, "processing", 90, f"{p} Muxing into MKV...")
-            await asyncio.to_thread(
-                self.muxer.mux,
-                video_path=run.path,
-                srts=passed,
-                current_file=index + 1,
-                total_files=total,
-                strip_existing=video.stripExistingSubs,
-                # Never delete the source while a language failed: it is what a retry starts from.
-                cleanup_original=opts.cleanUp and run.all_passed(),
-                job=job
-            )
+    async def _write_outputs(self, run: VideoRun, job, p: str):
+        """STEP 5: the passed cells go INTO the video by the verified swap (D-0002 §4); kept-only → untouched."""
+        job.raise_if_aborted()
+        event_manager.emit(run.path, "processing", 90, f"{p} Step 5/5: Writing subtitles into the video...")
+        result = await asyncio.to_thread(write_run, run, job)
+        if result is not None:
+            logger.info(f"{p} {result.status}: {result.path.name}")
 
     def _emit_outcome(self, run: VideoRun, p: str, name: str):
         summary = run.summary()
@@ -209,7 +191,7 @@ class PipelineOrchestrator:
             cell.state, cell.reason, cell.cues = CellState.PENDING, "", None
             cell.attempts = [a for a in cell.attempts if a.startswith(("existing", "download"))]
             await self._run_cell(run, self._ladder(run, video, opts, job, p, 0, 1), lang_code, job, p)
-            await self._write_outputs(run, video, opts, job, p, 0, 1)
+            await self._write_outputs(run, job, p)
             self._emit_outcome(run, p, video.name)
         except JobAborted:
             event_manager.emit(fid, "cancelled", 0, "Cancelled")
@@ -263,10 +245,9 @@ class PipelineOrchestrator:
             plans = plan(video.out, existing, original, downloads_enabled=self.downloads_enabled)
             run.plans = {lp.language: lp for lp in plans}
             run.cells = {lp.language: Cell(lp.language) for lp in plans if not lp.source_only}
-            # A language the muxer cannot title must fail now, not after a 40-minute transcription.
-            if opts.muxIntoMkv:
-                for lang_code in run.cells:
-                    substudio_track_title(lang_code)
+            # A language the output cannot title must fail now, not after a 40-minute transcription.
+            for lang_code in run.cells:
+                substudio_track_title(lang_code)
             self.runs[fid] = run
             event_manager.emit_cells(fid, run.to_json())
 
@@ -277,7 +258,7 @@ class PipelineOrchestrator:
                 await self._run_cell(run, ladder, lang_code, job, p)
 
             # STEP 5: OUTPUT — only the cells that passed
-            await self._write_outputs(run, video, opts, job, p, index, total)
+            await self._write_outputs(run, job, p)
             self._emit_outcome(run, p, video.name)
 
         except JobAborted:
@@ -353,8 +334,8 @@ async def retry(request: RetryRequest):
     # One job at a time on this PC (D-0001: one heavy model), and a queued video counts as busy too.
     if orchestrator.active_jobs or job_registry.active_ids():
         raise HTTPException(status_code=409, detail="Another job is running: retry once it has finished")
-    if not Path(fid).is_file():
-        raise HTTPException(status_code=409, detail="The source video is no longer there (removed by cleanUp?)")
+    if not current_path(run).is_file():
+        raise HTTPException(status_code=409, detail=f"The video is no longer there: {current_path(run).name}")
     orchestrator.active_jobs.add(fid)  # claimed before returning: a second retry in the same instant gets 409
     task = asyncio.create_task(orchestrator.retry_cell(request.video, request.language, request.globalOptions))
     _jobs.add(task)

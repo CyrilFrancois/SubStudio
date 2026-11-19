@@ -100,6 +100,7 @@ class VideoRun:
     human: Dict[str, Source] = field(default_factory=dict)        # language → a human subtitle that passed rung 1–2
     asr: Optional[Source] = None                                  # the transcription, made at most once per run
     context: TranslationContext = field(default_factory=TranslationContext)
+    output_path: Optional[str] = None  # the video's name after the in-place swap renamed it (core/output.write_run)
 
     def passed(self) -> Dict[str, List[Cue]]:
         return {lang: c.cues for lang, c in self.cells.items() if c.state == CellState.PASSED}
