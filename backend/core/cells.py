@@ -73,6 +73,9 @@ class Cell:
     # One sentence per rung that was tried and fell through, in order (« existing: ignored: en embedded »), so a
     # cell that passed at rung 3 still says why rungs 1–2 did not.
     attempts: List[str] = field(default_factory=list)
+    # A person saved these cues in the Review screen (api/subtitles): written back with the reviewed tag, so a
+    # retry of another language that rebuilds the file keeps it. Cleared when the cell is made again.
+    reviewed: bool = False
 
     def to_json(self) -> dict:
         o = self.origin
@@ -125,7 +128,7 @@ def produce_cell(cell: Cell, source: Source, translator: Translator,
                  check_abort: Optional[Callable[[], None]] = None) -> None:
     """Fills one cell from the source: kept as is when it is already in that language, else translated.
     Sets PASSED with its origin, or FAILED with the one-sentence reason. JobAborted propagates."""
-    cell.state, cell.reason, cell.cues = CellState.RUNNING, "", None
+    cell.state, cell.reason, cell.cues, cell.reviewed = CellState.RUNNING, "", None, False
     if source.language == cell.language:
         rung = Rung.ASR if source.rung == Rung.ASR else Rung.EXISTING
         cell.cues, cell.origin, cell.state = source.cues, Origin(rung), CellState.PASSED

@@ -1428,6 +1428,7 @@
     },
     "/api/subtitles/{video_id}/{lang}": {
       "get": {
+        "description": "The video's SubStudio track in `lang` ('ov' = the audio's language): cues by position, with the text each was\ntranslated from while the run that made it is still in memory.",
         "operationId": "get_subtitles_api_subtitles__video_id___lang__get",
         "parameters": [
           {
@@ -1477,6 +1478,7 @@
         ]
       },
       "put": {
+        "description": "Saves the edited text of every cue (ids and timings must be the file's: 409 otherwise) by the verified swap,\nand marks the track reviewed. Answers the saved list, checked again; the video id changes only if the file was\nrenamed. flags and limits in the body are ignored.",
         "operationId": "put_subtitles_api_subtitles__video_id___lang__put",
         "parameters": [
           {

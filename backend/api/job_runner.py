@@ -49,6 +49,11 @@ class JobRunner:
     def connected(self) -> bool:
         return self._orch is not None
 
+    @property
+    def orchestrator(self):
+        """The pipeline main.py connected (None before): api/subtitles reads its runs kept for retry."""
+        return self._orch
+
     def connect(self, orchestrator, video_job_cls, options_cls, *, start: bool = True):
         """Called once by main.py's lifespan. Marks jobs a stopped backend left running as failed, then runs the
         queue (queued jobs from before the restart included)."""

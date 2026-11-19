@@ -263,9 +263,9 @@ def test_lost_existing_subtitle_fails_verify(tmp_path, monkeypatch):
     monkeypatch.setattr(inplace, "_kept_subs", lambda info, langs: [])   # the mux forgets the SDH track…
     real_verify = inplace._verify
 
-    def verify_against_truth(source_info, tmp, expected, origins=None):  # …but the check knows it was there
+    def verify_against_truth(*args):  # …but the check knows it was there
         monkeypatch.undo()
-        real_verify(source_info, tmp, expected, origins)
+        real_verify(*args)
 
     monkeypatch.setattr(inplace, "_verify", verify_against_truth)
     with pytest.raises(OutputError, match="subtitle tracks were not all kept"):
