@@ -20,6 +20,7 @@ from core.translator import SubtitleTranslator
 from core.muxer import VideoMuxer
 from core.events import event_manager, setup_logging_bridge
 from core.jobs import job_registry, JobAborted
+from api import router as api_router
 
 # --- LOGGING CONFIGURATION ---
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
@@ -255,6 +256,8 @@ async def lifespan(app: FastAPI):
 
 # --- API ---
 app = FastAPI(title="SubStudio Pro", lifespan=lifespan)
+
+app.include_router(api_router)
 
 app.add_middleware(
     CORSMiddleware,
