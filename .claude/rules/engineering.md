@@ -60,10 +60,8 @@ asserting a shape (`/api/scan` returns `{"files": [...]}`, not an array).
 
 **Units.** Name the unit of every number: ms vs s, SRT `,` vs `.` decimal, frames vs seconds.
 
-Concrete trap in this codebase: `translator.refine_and_translate` catches a failed batch and
-appends **the untranslated source text** as a fallback. That is deliberate (one bad batch should
-not lose the file) but it means a wholly-failed translation silently returns the original
-language. If you touch that path, keep the ERROR log.
+A translation that cannot be completed raises `TranslationFailed` and fails the video: the source
+text is never shipped as if it were the translation (it was until 2026-11-19, silently). Keep it so.
 
 ### Boundaries that have actually bitten this project
 
@@ -75,7 +73,7 @@ language. If you touch that path, keep the ERROR log.
 - **Paths with spaces and non-ASCII.** `file_id` is a full path used as the SSE routing key. It
   must be URL-encoded exactly **once** — encoding twice yields a key no emitter ever writes to,
   and the stream silently delivers nothing.
-- **Subtitles past the end of the video.** `muxer.process_srt_content` drops them; a player will
+- **Subtitles past the end of the video.** `subtitles.drop_after` (called by `muxer.mux`) drops them; a player will
   otherwise hold a black frame.
 - **Zero-byte and corrupt media.** `extract_audio` returns `""`, which must raise, not proceed.
 
@@ -117,8 +115,8 @@ docker compose exec -T backend sh -c 'printf %s "$GEMINI_API_KEY" | wc -c; print
 
 ### Live checks use the shipped path, on seeded cases
 
-- **A live AI check runs on the shipped model and code path** — call `refine_and_translate` with
-  the configured `GEMINI_MODEL`, never a hand-built prompt or another model.
+- **A live AI check runs on the shipped model and code path** — call `translate_cues` with
+  the configured backend (`GEMINI_MODEL` for Gemini), never a hand-built prompt or another model.
 - **Seed the case the guarded branch needs.** When a bug hides behind "does this file have X",
   make a file that has X: no audio, PGS subs, a non-ASCII name with spaces, zero bytes, subs past
   the end.
@@ -147,14 +145,20 @@ and lost on restart.
   `base_path`.
 - `backend/core/transcriber.py` — Faster-Whisper, lazy model load, `gc.collect()` on size change.
   Word timestamps grouped into blocks on sentence end or 70 chars.
-- `backend/core/translator.py` — Gemini over its REST API (`httpx`, no SDK), `thinkingLevel: low`.
-  `get_context_profile()` builds a story bible from the filename; `refine_and_translate()` sends
-  30 SRT blocks per request at temperature 0.2, retrying twice. `_generate` raises on any HTTP
-  error, missing candidate, or `finishReason != STOP`.
+- `backend/core/subtitles/` — **the one subtitle representation**: `Cue(id, start_ms, end_ms, text)`.
+  `cues.py` reads any SRT/VTT/ASS (legacy code page chosen from the detected language), shifts,
+  clips, wraps and writes SRT; nothing else parses or prints a timestamp. `translate.py` holds the
+  `Translator` contract (`translate([{id, text}], target, context) -> [{id, text}]`, no timing ever
+  sent) and `translate_cues`, which batches, rejects an answer whose id set differs (retry once,
+  then split down to one cue), re-attaches timings by id, and raises `TranslationFailed`.
+- `backend/core/translator.py` — `GeminiTranslator`, an optional backend of that contract: Gemini
+  REST (`httpx`, no SDK), `thinkingLevel: low`, JSON output with a response schema, 30 cues per
+  call, temperature 0.2. `get_context_profile()` builds a story bible from the filename.
+  `_generate` raises on any HTTP error, missing candidate, or `finishReason != STOP`.
 - `backend/core/muxer.py` — copies existing streams, appends the AI tracks with ISO 639-2 tags.
   Output is `{stem}_SubStudio.mkv` **next to the source**, not in a separate folder.
-- `backend/core/subtitle_processor.py` — timestamp offsetting (clamped at 0). Its
-  `load_existing_subtitles` / `extract_embedded_subs` are **currently unused** — see the workspace `TODOLIST.MD` (« [SubStudio] backlog »).
+- `backend/core/subtitle_processor.py` — finds the first embedded text track and extracts it as
+  cues (raises on failure). **Currently unused** — see the workspace `TODOLIST.MD` (« [SubStudio] backlog »).
 - `backend/core/events.py` — `EventManager`, one broadcast channel per `file_id`, thread-safe.
 
 ### Frontend (Next.js 14, TypeScript)

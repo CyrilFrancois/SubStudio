@@ -1,14 +1,13 @@
-# subtitle_processor.py — SubtitleProcessor: SRT timestamp offsetting and embedded-track extraction. Exports: SubtitleProcessor.
+# subtitle_processor.py — SubtitleProcessor: find and extract an embedded text subtitle track as cues. Exports: SubtitleProcessor.
 
 import json
 import os
 import subprocess
 import logging
-import re
-from datetime import timedelta
-from typing import Optional
+from typing import List, Optional
 
 from .jobs import JobHandle, JobAborted
+from .subtitles import Cue, load_file
 
 logger = logging.getLogger("SubStudio.Processor")
 
@@ -18,45 +17,6 @@ TEXT_SUBTITLE_CODECS = {"subrip", "srt", "ass", "ssa", "mov_text", "webvtt", "te
 
 
 class SubtitleProcessor:
-    def __init__(self):
-        self.timestamp_regex = re.compile(r'(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})')
-
-    def apply_offset(self, srt_content: str, offset_seconds: float) -> str:
-        """Shifts every subtitle block. Positive delays, negative advances; clamped at zero."""
-        if offset_seconds == 0:
-            return srt_content
-
-        logger.info(f"⏱️ Adjusting timing by {offset_seconds}s")
-
-        def shift_timestamp(match):
-            start_val = self._add_offset(match.group(1), offset_seconds)
-            end_val = self._add_offset(match.group(2), offset_seconds)
-            return f"{start_val} --> {end_val}"
-
-        return self.timestamp_regex.sub(shift_timestamp, srt_content)
-
-    def _add_offset(self, timestamp_str: str, offset_sec: float) -> str:
-        try:
-            h, m, s_ms = timestamp_str.split(':')
-            s, ms = s_ms.split(',')
-
-            td = timedelta(hours=int(h), minutes=int(m), seconds=int(s), milliseconds=int(ms))
-            new_td = td + timedelta(seconds=offset_sec)
-
-            if new_td.total_seconds() < 0:
-                new_td = timedelta(0)
-
-            total_seconds = int(new_td.total_seconds())
-            hours = total_seconds // 3600
-            minutes = (total_seconds % 3600) // 60
-            seconds = total_seconds % 60
-            milliseconds = int(new_td.microseconds / 1000)
-
-            return f"{hours:02}:{minutes:02}:{seconds:02},{milliseconds:03}"
-        except Exception as e:
-            logger.error(f"Timestamp shift error: {e}")
-            return timestamp_str
-
     def find_text_subtitle_stream(self, video_path: str) -> Optional[int]:
         """
         Returns the subtitle-relative index (for -map 0:s:N) of the first TEXT subtitle
@@ -86,42 +46,30 @@ class SubtitleProcessor:
         return None
 
     def extract_embedded_subs(self, video_path: str, track_index: int = 0,
-                              job: Optional[JobHandle] = None) -> str:
-        """Extracts one embedded subtitle stream to a string via ffmpeg."""
+                              job: Optional[JobHandle] = None) -> List[Cue]:
+        """Extracts one embedded text subtitle stream as cues. Raises on any failure: a failed
+        extraction must never read as a video without subtitles."""
         temp_srt = f"{os.path.splitext(video_path)[0]}.tmp_extract.srt"
-
         cmd = ['ffmpeg', '-y', '-v', 'error', '-i', video_path,
                '-map', f'0:s:{track_index}', '-c:s', 'srt', '-f', 'srt', temp_srt]
-
-        process = None
         try:
             logger.info(f"⚙️ Extracting embedded track {track_index}...")
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             if job:
                 job.track(process)
-            _, stderr = process.communicate()
-
+            try:
+                _, stderr = process.communicate()
+            finally:
+                if job:
+                    job.untrack()
             if job and job.is_aborted:
                 raise JobAborted(job.file_id)
-
             if process.returncode != 0:
-                logger.error(f"Embedded extraction failed: {stderr[:300]}")
-                return ""
-
-            if os.path.exists(temp_srt):
-                with open(temp_srt, 'r', encoding='utf-8', errors='ignore') as f:
-                    return f.read()
-        except JobAborted:
-            raise
-        except Exception as e:
-            logger.error(f"Extraction failed: {e}")
+                raise RuntimeError(f"Embedded subtitle extraction failed: {stderr[:300]}")
+            return load_file(temp_srt)
         finally:
-            if job:
-                job.untrack()
             if os.path.exists(temp_srt):
                 try:
                     os.remove(temp_srt)
                 except OSError:
                     pass
-
-        return ""

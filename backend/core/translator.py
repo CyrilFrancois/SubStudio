@@ -1,32 +1,49 @@
-# translator.py — SubtitleTranslator: story-bible context + batched SRT translation. Exports: SubtitleTranslator.
+# translator.py — GeminiTranslator: optional cloud backend of the Translator contract, plus the filename story bible. Exports: GeminiTranslator.
 
-import os
+import json
 import logging
-import time
-import httpx
-from typing import Callable, Any, List, Optional
+import os
+from typing import List
 
-from .jobs import JobHandle, JobAborted
+import httpx
+
+from .subtitles import BatchMismatch, CueText, TranslationContext
 
 logger = logging.getLogger("SubStudio.Translator")
 
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
-class SubtitleTranslator:
+# Gemini's structured output: the reply is parsed as JSON and must be a list of {id, text}.
+# translate_cues still checks the id set; the schema only makes a well-formed answer likely.
+_BATCH_SCHEMA = {
+    "type": "ARRAY",
+    "items": {
+        "type": "OBJECT",
+        "properties": {"id": {"type": "INTEGER"}, "text": {"type": "STRING"}},
+        "required": ["id", "text"],
+    },
+}
+
+
+class GeminiTranslator:
+    batch_size = 30
+
     def __init__(self, api_key: str = None):
         self.api_key = api_key or os.getenv("GEMINI_API_KEY", "")
         # Benchmarked 2026-11-08 on a 3-block SRT: ~2 s at thinkingLevel "low" vs ~5.5 s at the default.
         # thinkingLevel is a Gemini 3.x field — a 2.5 model override would need thinkingBudget instead.
         self.model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+        self.name = f"gemini:{self.model}"
         self.http = httpx.Client(timeout=120)
         if not self.api_key:
             logger.error("GEMINI_API_KEY is not set — every translation request will fail.")
 
-    def _generate(self, user_content: str, temperature: float, system_prompt: str = "") -> str:
-        body = {
-            "contents": [{"role": "user", "parts": [{"text": user_content}]}],
-            "generationConfig": {"temperature": temperature, "thinkingConfig": {"thinkingLevel": "low"}},
-        }
+    def _generate(self, user_content: str, temperature: float, system_prompt: str = "", schema: dict = None) -> str:
+        config = {"temperature": temperature, "thinkingConfig": {"thinkingLevel": "low"}}
+        if schema:
+            config["responseMimeType"] = "application/json"
+            config["responseSchema"] = schema
+        body = {"contents": [{"role": "user", "parts": [{"text": user_content}]}], "generationConfig": config}
         if system_prompt:
             body["systemInstruction"] = {"parts": [{"text": system_prompt}]}
         r = self.http.post(GEMINI_URL.format(model=self.model), json=body,
@@ -40,6 +57,9 @@ class SubtitleTranslator:
         # MAX_TOKENS / SAFETY / RECITATION mean a partial or empty text: accepting it would ship a
         # silently truncated subtitle file, so it is an error, not a result.
         reason = candidates[0].get("finishReason")
+        if reason == "MAX_TOKENS":
+            # Too much text for one answer: a wrong answer, so translate_cues splits the batch instead of resending it.
+            raise BatchMismatch("reply cut at the output token limit (finishReason=MAX_TOKENS)")
         if reason != "STOP":
             raise RuntimeError(f"Gemini stopped with finishReason={reason}")
         parts = candidates[0].get("content", {}).get("parts", [])
@@ -49,12 +69,8 @@ class SubtitleTranslator:
         return text
 
     def get_context_profile(self, filename: str) -> str:
-        """
-        Research Phase: Identifies the show/movie to ensure character names 
-        and gender-specific grammar are correct.
-        """
+        """A 'story bible' guessed from the filename: names, genders, tone. Empty-safe: a failure gives a neutral note."""
         logger.info(f"AI searching filename context: {filename}")
-        
         prompt = f"""Identify the media from this filename: '{filename}'
         Return a 'Story Bible' for a translator:
         - Series/Movie Title
@@ -62,100 +78,35 @@ class SubtitleTranslator:
         - Tone (Slang, Formal, Medical, Sci-Fi)
         - Brief Plot Context
         If unknown, infer from keywords."""
-
         try:
             return self._generate(prompt, temperature=0.3)
         except Exception as e:
             logger.error(f"   ❌ Context Research failed: {e}")
             return "Neutral media content. No specific character data."
 
-    def refine_and_translate(
-        self, 
-        srt_content: str, 
-        target_lang: str, 
-        file_id: str, 
-        on_progress: Callable, 
-        job: Optional[JobHandle],
-        context_profile: str,
-        current_file: int,
-        total_files: int,
-        is_whisper_source: bool = False
-    ) -> str:
-        """
-        Processes the SRT in batches to avoid token limits and maintain format.
-        Includes terminal logging for every 20% of progress.
-        """
-        blocks = srt_content.strip().split('\n\n')
-        batch_size = 30 
-        results = []
-        total_batches = (len(blocks) + batch_size - 1) // batch_size
-        
-        prefix = f"[{current_file}/{total_files} Files]"
-        logger.info(f"Translating {len(blocks)} blocks into {target_lang.upper()}...")
+    def translate(self, cues: List[CueText], target: str, context: TranslationContext) -> List[CueText]:
+        reply = self._generate(json.dumps(cues, ensure_ascii=False), temperature=0.2,
+                               system_prompt=self._system_prompt(target, context), schema=_BATCH_SCHEMA)
+        try:
+            return json.loads(reply)
+        except json.JSONDecodeError as e:
+            raise BatchMismatch(f"reply is not JSON ({e})") from e
 
-        last_logged_pct = -1
-
-        for i in range(0, len(blocks), batch_size):
-            if job and job.is_aborted:
-                logger.warning(f"🛑 {prefix} Translation aborted by user.")
-                raise JobAborted(job.file_id)
-
-            batch = blocks[i : i + batch_size]
-            batch_text = "\n\n".join(batch)
-            current_batch_idx = (i // batch_size) + 1
-            
-            # Progress calculation for Frontend (stays within Step 4 range)
-            progress_pct = 40 + int((current_batch_idx / total_batches) * 40)
-            on_progress(file_id, "translating", progress_pct, 
-                        f"{prefix} Step 4/5: Translating {target_lang.upper()} ({current_batch_idx}/{total_batches})")
-
-            # Terminal logging every 20%
-            completion_pct = int((current_batch_idx / total_batches) * 100)
-            if completion_pct >= last_logged_pct + 20:
-                logger.info(f"Translation Progress ({target_lang.upper()}): {completion_pct}%")
-                last_logged_pct = (completion_pct // 20) * 20
-
-            system_prompt = self._build_system_prompt(target_lang, context_profile, is_whisper_source)
-
-            try:
-                translated_batch = self._call_llm(system_prompt, batch_text)
-                results.append(translated_batch)
-            except Exception as e:
-                logger.error(f"   ❌ {prefix} Batch {current_batch_idx} failed: {e}")
-                results.append(batch_text) # Fallback to original
-
-        return "\n\n".join(results)
-
-    def _call_llm(self, system_prompt: str, user_content: str, retries=2) -> str:
-        """Wrapper for the Gemini call with specific SRT formatting enforcement."""
-        for attempt in range(retries + 1):
-            try:
-                content = self._generate(user_content, temperature=0.2, system_prompt=system_prompt)
-                # Clean up AI formatting artifacts
-                return content.replace("```srt", "").replace("```", "").strip()
-            except Exception as e:
-                if attempt == retries: raise e
-                logger.warning(f"Gemini call failed (attempt {attempt + 1}/{retries + 1}): {e}")
-                time.sleep(2)
-
-    def _build_system_prompt(self, lang: str, context: str, is_whisper: bool) -> str:
-        whisper_instruction = ""
-        if is_whisper:
-            whisper_instruction = """
-            NOTE: Source is AI-transcribed and may have phonetic errors. 
-            Use the provided context bible to fix character names and terms in the speech.
-            No other information than the translation.
-            """
-
-        return f"""You are an expert subtitle translator ({lang}).
-        {whisper_instruction}
-        
-        STORY BIBLE FOR CONTEXT:
-        {context}
-
-        RULES:
-        1. Keep TIMESTAMPS and INDEX NUMBERS exactly as provided.
-        2. Preserve SRT structure: [Index]\\n[Time] --> [Time]\\n[Text]\\n\\n
-        3. Translate only the text content. Don't add the name of the people talking... focus only on the translation. And don't translate the names.
-        4. Do not include any explanations or markdown.
-        """
+    def _system_prompt(self, lang: str, ctx: TranslationContext) -> str:
+        parts = [
+            f"You are an expert subtitle translator. Translate each subtitle into the language with ISO code '{lang}'.",
+            "Input: a JSON array of {id, text}. Output: a JSON array with exactly one {id, text} per input id, "
+            "the same ids, the text translated. Keep line breaks inside a text. Never merge, split or skip a "
+            "subtitle. Do not add speaker names. Do not translate people's names.",
+        ]
+        if ctx.source_is_asr:
+            parts.append("The source is machine-transcribed and may have phonetic errors: use the context to fix "
+                         "names and terms.")
+        if ctx.glossary:
+            parts.append("Keep these untranslated: " + ", ".join(ctx.glossary))
+        if ctx.notes:
+            parts.append("STORY BIBLE FOR CONTEXT:\n" + ctx.notes)
+        if ctx.previous:
+            parts.append("The subtitles just before this batch (context only, do not output them):\n"
+                         + "\n".join(ctx.previous))
+        return "\n\n".join(parts)

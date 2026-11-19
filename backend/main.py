@@ -4,7 +4,6 @@ import logging
 import os
 import time
 import asyncio
-import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query
@@ -15,9 +14,9 @@ from typing import Dict, List, Optional, Any, Set
 
 # Core Imports
 from core.scanner import VideoScanner
-from core.subtitle_processor import SubtitleProcessor
 from core.transcriber import VideoTranscriber
-from core.translator import SubtitleTranslator
+from core.translator import GeminiTranslator
+from core.subtitles import TranslationContext, load_file, parse, shift, to_srt, translate_cues, wrap_lines
 from core.muxer import VideoMuxer
 from core.events import event_manager, setup_logging_bridge
 from core.jobs import job_registry, JobAborted
@@ -62,37 +61,14 @@ class ProcessRequest(BaseModel):
 class PipelineOrchestrator:
     def __init__(self):
         self.scanner = VideoScanner(base_path=MEDIA_ROOT)
-        self.processor = SubtitleProcessor()
         self.transcriber = VideoTranscriber(model_size="medium")
-        self.translator = SubtitleTranslator()
+        self.translator = GeminiTranslator()
         self.muxer = VideoMuxer()
         
         self.active_jobs: Set[str] = set()
         # Cache keyed BY PATH: a single timestamp meant two scans of different folders
         # within the debounce window both returned the first folder's contents.
         self._scan_cache: Dict[str, tuple] = {}
-
-    def split_long_lines(self, srt_text: str, max_chars: int = 50) -> str:
-        """Adds \n to subtitle lines that are too long."""
-        def process_block(match):
-            index, times, text = match.groups()
-            lines = text.strip().split('\n')
-            new_lines = []
-            
-            for line in lines:
-                if len(line) > max_chars:
-                    mid = len(line) // 2
-                    space_indices = [i for i, char in enumerate(line) if char == ' ']
-                    if space_indices:
-                        best_space = min(space_indices, key=lambda x: abs(x - mid))
-                        line = line[:best_space] + '\n' + line[best_space+1:]
-                new_lines.append(line)
-            
-            joined_content = '\n'.join(new_lines)
-            return f"{index}\n{times}\n{joined_content}\n\n"
-
-        pattern = re.compile(r"(\d+)\n(\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3})\n([\s\S]*?)(?:\n\n|\Z)")
-        return pattern.sub(process_block, srt_text)
 
     def get_files(self, target_path: str):
         now = time.time()
@@ -143,34 +119,27 @@ class PipelineOrchestrator:
             event_manager.emit(fid, "processing", 5, f"{p} Step 1/5: Analyzing context...")
             context = await asyncio.to_thread(self.translator.get_context_profile, video.name)
 
-            # STEP 2: SOURCE (Transcription or SRT Import)
-            srt_content = ""
+            # STEP 2: SOURCE (Transcription or SRT Import) — from here on, a list of cues, never SRT text
+            cues = None
             is_whisper = True
-            
+
             if video.workflowMode in ["srt", "hybrid"]:
                 potential_paths = []
                 if video.selectedSrtPath:
                     potential_paths.append(Path(video.selectedSrtPath))
-                
-                video_path = Path(video.path)
-                potential_paths.append(video_path.with_suffix(".srt"))
-                
-                found_path = next((p for p in potential_paths if p.exists() and p.is_file()), None)
+                potential_paths.append(Path(video.path).with_suffix(".srt"))
 
+                found_path = next((p for p in potential_paths if p.exists() and p.is_file()), None)
                 if found_path:
                     logger.info(f"🔍 Found SRT at: {found_path}")
                     event_manager.emit(fid, "processing", 10, f"{p} Found SRT {found_path.name}")
-                    with open(found_path, "r", encoding="utf-8", errors="ignore") as f:
-                        srt_content = f.read()
+                    # An unreadable or empty sidecar raises: it is never silently replaced by a transcription.
+                    cues = await asyncio.to_thread(load_file, found_path)
                     is_whisper = False
 
-            # If no SRT found or mode is 'pure', run transcription
-            if not srt_content:
+            if cues is None:
                 event_manager.emit(fid, "processing", 15, f"{p} Transcribing with Whisper...")
-                
-                # UPDATED: We pass both the model_size and the context.
-                # The transcriber will check if 'opts.transcriptionEngine' is already loaded.
-                srt_content = await asyncio.to_thread(
+                srt_text = await asyncio.to_thread(
                     self.transcriber.transcribe,
                     video_path=video.path,
                     file_id=fid,
@@ -181,36 +150,40 @@ class PipelineOrchestrator:
                     context_prompt=context,
                     job=job
                 )
+                cues = parse(srt_text, "srt")
+                if not cues:
+                    raise RuntimeError("Transcription produced no subtitle (no speech detected?)")
 
             # STEP 3: SYNC
             if video.syncOffset != 0:
-                srt_content = self.processor.apply_offset(srt_content, video.syncOffset)
+                logger.info(f"⏱️ Adjusting timing by {video.syncOffset}s")
+                cues = shift(cues, video.syncOffset)
 
-            # STEP 4: TRANSLATION & REFINING
+            # STEP 4: TRANSLATION — a language that cannot be fully translated fails the video (TranslationFailed)
+            translation_ctx = TranslationContext(title=video.name, notes=context, source_is_asr=is_whisper)
             translated_map = {}
             for lang_code in video.out:
                 job.raise_if_aborted()
                 event_manager.emit(fid, "processing", 50, f"{p} Translating to {lang_code}...")
-                translation = await asyncio.to_thread(
-                    self.translator.refine_and_translate,
-                    srt_content=srt_content,
-                    target_lang=lang_code,
-                    file_id=fid,
-                    on_progress=event_manager.emit,
-                    job=job,
-                    context_profile=context,
-                    current_file=index + 1,
-                    total_files=total,
-                    is_whisper_source=is_whisper
+                logger.info(f"Translating {len(cues)} cues into {lang_code.upper()} with {self.translator.name}...")
+
+                def on_batch(done: int, total_cues: int, lang=lang_code):
+                    event_manager.emit(fid, "translating", 40 + int(done / total_cues * 40),
+                                       f"{p} Step 4/5: Translating {lang.upper()} ({done}/{total_cues} lines)")
+
+                translated = await asyncio.to_thread(
+                    translate_cues, cues, lang_code, translation_ctx, self.translator,
+                    on_batch=on_batch, check_abort=job.raise_if_aborted,
                 )
-                
-                translation = self.split_long_lines(translation)
-                translated_map[lang_code] = translation
-                
-                if opts.generateSRT:
+                translated = wrap_lines(translated, 50)
+                translated_map[lang_code] = translated
+
+            # Written only once EVERY language succeeded: a video that ends in error leaves no partial output.
+            if opts.generateSRT:
+                for lang_code, translated in translated_map.items():
                     out_srt = Path(video.path).with_suffix(f".{lang_code}.srt")
                     with open(out_srt, "w", encoding="utf-8") as f:
-                        f.write(translation)
+                        f.write(to_srt(translated))
 
             # STEP 5: MUXING
             if opts.muxIntoMkv:
