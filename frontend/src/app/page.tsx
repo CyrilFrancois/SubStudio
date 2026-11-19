@@ -137,7 +137,7 @@ export default function LibraryPage() {
             <p className="text-xs text-gray-500 mt-0.5">
               {lib ? (
                 <>
-                  <span title={lib.root}>{lib.videos.length} videos</span>
+                  <span title={lib.root}>{lib.videos.length} video{lib.videos.length === 1 ? "" : "s"}</span>
                   {languages.map(l => <span key={l}> · {languageName(l)} missing on {missingCount(l)}</span>)}
                   {uncheckedCount > 0 && <span> · existing subtitles not checked yet on {uncheckedCount}</span>}
                   {' · '}scanned {new Date(lib.scanned_at).toLocaleTimeString()}
@@ -265,7 +265,9 @@ export default function LibraryPage() {
           className="ml-auto flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white disabled:bg-white/5 disabled:text-gray-600 disabled:cursor-not-allowed"
         >
           {busy ? <Loader2 size={15} className="animate-spin" aria-hidden /> : <Play size={15} aria-hidden />}
-          {startAll ? `Start all to do (${toStart.length})` : `Start${toStart.length ? ` (${toStart.length})` : ''}`}
+          {/* What one click does, on the button itself: how many videos, which languages (workspace-64). */}
+          {startAll ? `Start all to do: ${toStart.length} video${toStart.length === 1 ? '' : 's'}` : `Start ${toStart.length} video${toStart.length === 1 ? '' : 's'}`}
+          {toStart.length > 0 && languages.length > 0 && <span className="font-normal text-indigo-200"> · {languages.map(l => l.toUpperCase()).join(' ')}</span>}
         </button>
       </footer>
     </div>

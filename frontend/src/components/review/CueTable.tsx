@@ -4,7 +4,7 @@
 import { memo, useEffect, useRef } from 'react';
 import { AlertTriangle, Pencil } from 'lucide-react';
 import type { Cue } from '@/lib/types';
-import { flagLabel, time } from './flags';
+import { cueFlagLabel, time } from './flags';
 
 interface RowProps {
   cue: Cue;
@@ -23,13 +23,16 @@ const CueRow = memo(function CueRow({ cue: c, text, edited, selected, cols, show
   const editor = useRef<HTMLTextAreaElement>(null);
   useEffect(() => { if (selected) editor.current?.focus(); }, [selected]);
   const flags = c.flags ?? [];
+  // A line the translator left in the source language stands out in the list, not only in its badge.
+  const left = flags.includes('untranslated');
   return (
     <div
       role="row"
       aria-selected={selected}
       onClick={() => onSelect(c.id)}
-      className={`grid ${cols} gap-3 px-3 py-2 border-b border-white/5 cursor-pointer ${
-        selected ? 'bg-indigo-500/[0.08]' : 'hover:bg-white/[0.02]'}`}
+      className={`grid ${cols} gap-3 px-3 py-2 border-b border-white/5 border-l-2 cursor-pointer ${
+        left ? 'border-l-amber-400/70' : 'border-l-transparent'} ${
+        selected ? 'bg-indigo-500/[0.08]' : left ? 'bg-amber-500/[0.04] hover:bg-amber-500/[0.07]' : 'hover:bg-white/[0.02]'}`}
     >
       <span role="cell" className="text-xs text-gray-500 tabular-nums pt-0.5">{c.id}</span>
       <span role="cell" className="text-xs text-gray-500 tabular-nums pt-0.5">{time(c.start_ms)}</span>
@@ -54,7 +57,7 @@ const CueRow = memo(function CueRow({ cue: c, text, edited, selected, cols, show
       <span role="cell" className="flex flex-wrap gap-1 content-start">
         {flags.map(f => (
           <span key={f} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-amber-500/30 bg-amber-500/10 text-[11px] text-amber-300 whitespace-nowrap">
-            <AlertTriangle size={11} aria-hidden /> {flagLabel(f)}
+            <AlertTriangle size={11} aria-hidden /> {cueFlagLabel(f, c)}
           </span>
         ))}
       </span>
