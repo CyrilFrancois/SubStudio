@@ -11,8 +11,13 @@ in `SubStudio/CLAUDE.md` or `SubStudio/.claude/rules/*.md`. Map: `doc/harness-mi
 ## Context and goal
 
 **SubStudio:** a local media pipeline that transcribes video with Faster-Whisper, translates the
-subtitles with Google Gemini (`gemini-3.8-flash`), and muxes them into MKV. FastAPI backend, Next.js 14 frontend,
-Docker Compose, **no database**.
+subtitles (today: Google Gemini `gemini-3.8-flash` on branch `feat/gemini-and-stop-job`, OpenAI on `main`), and muxes
+them into MKV. FastAPI backend, Next.js 14 frontend, Docker Compose, **no database**.
+
+**Model constraint (Cyril, 2026-11-19; `doc/decisions/D-0001 local free models within half the machine.md`):** the
+best models that are **free and run locally**, using **at most half the computer** (4 of 8 threads, ≤ 7 GB RAM on
+this Ryzen 5 7520U / 15 GB laptop, no CUDA). A cloud API is never the default path. The target design and the
+candidate models: `doc/architecture-review-2026-11-19.md`.
 
 - **For whom:** Cyril, in three roles: processing a single video, running a batch overnight, watching the result.
 - **Goal:** a library where every video carries correct, well-timed subtitles in the wanted languages, with no
@@ -45,7 +50,7 @@ correct fix that makes the workflow worse is still wrong.
 | Code | https://github.com/CyrilFrancois/SubStudio (public), local `SubStudio/` | Cyril's GitHub account | `origin/main` is production; renamed from videosToSubtitledvideos on 2026-11-18 |
 | App | http://localhost:3000 (UI), http://localhost:8000/health (API) | `docker compose up --build` | no database; state in memory |
 | Gemini key | https://aistudio.google.com/apikey | Cyril's Google account | value lives in `SubStudio/.env` only |
-| Backlog | workspace `TODOLIST.MD`, « [SubStudio] backlog » above the marker | Cyril writes | Claude never edits it |
+| Backlog | workspace `TODOLIST.MD`, `### [SubStudio]` below the marker | Claude keeps it; Cyril's notes go above the marker | ordered by the architecture review |
 | Pre-harness files | `_archive/2026-11-18_*-before-harness.md` (gitignored) | local | byte-exact copies |
 
 ## Vocabulary
