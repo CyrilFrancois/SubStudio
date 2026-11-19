@@ -241,11 +241,12 @@ class _Gate:
     """Records each call; rejects the languages in `reject` with a sentence, like Verdict.reason."""
 
     def __init__(self, reject=()):
-        self.reject, self.calls = set(reject), []
+        self.reject, self.calls, self.from_audio = set(reject), [], []
 
-    def __call__(self, cues_, speech, lang, label=None, duration_ms=None, source=None):
+    def __call__(self, cues_, speech, lang, label=None, duration_ms=None, source=None, timing_from_audio=False):
         from core.gate import Check, Verdict
         self.calls.append((lang, label, source is not None, duration_ms))
+        self.from_audio.append((lang, timing_from_audio))
         ok = lang not in self.reject
         why = "" if ok else f"{lang}: 41 % of lines overlap speech (min 85 %)"
         return Verdict(ok, [Check("sync", 0.41, 0.85, ok, why)])
@@ -339,6 +340,15 @@ def test_translated_cell_is_gated_against_its_source_and_fails_with_the_sentence
     assert cells["fr"]["state"] == "failed" and cells["fr"]["reason"] == "fr: 41 % of lines overlap speech (min 85 %)"
     assert ("fr", None, True, 9000) in ladder.deps.gate.calls        # source cues given for a translation
     assert reads == [1] and asr == []                                 # speech read once for the whole video
+    assert ("fr", False) in ladder.deps.gate.from_audio               # a human source's times: must be measured
+
+
+def test_cues_timed_by_whisper_tell_the_gate_their_times_come_from_the_audio():
+    # A short clip's sync may be unmeasurable: that is no fault for a transcript or its translation, only for a human
+    # track (core/gate/verdict.evaluate, timing_from_audio).
+    run, ladder, asr, _, _ = gated(["en", "fr"], downloads=False, original="en")
+    go(run, ladder)
+    assert asr == [1] and sorted(ladder.deps.gate.from_audio) == [("en", True), ("fr", True)]
 
 
 def test_a_gate_that_cannot_measure_rejects_instead_of_crashing_the_video():

@@ -23,6 +23,11 @@ MIN_HALF_CUES = 20       # below this, half a subtitle gives no trustworthy offs
 # A peak-sharpness guard was tried instead and rejected: a frame-rate fault smears each half's peak too, so it hid
 # the fault drift exists to catch (16 of 16 seeded 25/23.976 copies lost their drift reason, 4 passed).
 MIN_HALF_SPEECH_SPANS = 40
+# The whole-file offset has the same weakness. A 5-min clip whose speech barely pauses (~25 spans) read Whisper cues
+# made from that very audio as shifted -59.9 / -5.9 / -51.0 s, and a copy shifted +3 s as +0.5 s (2026-11-19): there is
+# no information to locate a shift. Below this the offset is « not measurable » (None), never a number; the halves of
+# the 15 cached episodes hold 71-161 spans each, so every one of them stays measured.
+MIN_SPEECH_SPANS = 2 * MIN_HALF_SPEECH_SPANS
 # A cue that only describes a sound or music (« [laughs] », « (door closes) », « ♪ ») has no speech under it.
 _SOUND_ONLY = re.compile(r"^\s*(?:[\[(][^\])]*[\])]\s*|[♪#*]+.*)+$", re.S)
 
@@ -33,11 +38,13 @@ def dialogue_cues(cues: Sequence[Cue]) -> List[Cue]:
 
 @dataclass(frozen=True)
 class SyncMeasure:
-    offset_ms: int            # shift that best aligns the cues to the speech
+    offset_ms: Optional[int]  # shift that best aligns the cues to the speech; None when the speech has fewer than
+                              # MIN_SPEECH_SPANS spans: not measurable, which is not « 0 »
     drift_ms: Optional[int]   # offset of the second half minus the first (a frame-rate mismatch grows over time);
                               # None when a half has fewer than MIN_HALF_CUES dialogue cues or fewer than
                               # MIN_HALF_SPEECH_SPANS speech spans: not measurable, which is not « 0 »
-    peak_ratio: float         # correlation at the best offset / at zero: how clearly the best one wins
+    peak_ratio: Optional[float]  # correlation at the best offset / at zero: how clearly the best one wins (None with
+                                 # the offset)
     on_speech: float          # share of dialogue-cue time that lies on detected speech (0-1)
     speech_covered: float     # share of speech time that has a cue within COVER_PAD_MS (0-1)
     dialogue_cues: int
@@ -81,7 +88,11 @@ def measure_sync(cues: Sequence[Cue], speech: Sequence[Span], duration_ms: Optio
         raise ValueError("no speech detected: sync cannot be measured")
     end = max(duration_ms or 0, max(c.end_ms for c in talk), speech[-1][1])
     n = end // FRAME_MS + 1
-    offset, ratio = _offset_ms(speech, talk, n)
+    offset: Optional[int] = None
+    ratio: Optional[float] = None
+    if len(speech) >= MIN_SPEECH_SPANS:
+        offset, ratio = _offset_ms(speech, talk, n)
+        ratio = round(ratio, 3)
 
     half = (talk[0].start_ms + max(c.end_ms for c in talk)) // 2
     first = [c for c in talk if c.end_ms <= half]
@@ -100,4 +111,4 @@ def measure_sync(cues: Sequence[Cue], speech: Sequence[Span], duration_ms: Optio
     on_speech = float((cue_sig * speech_sig).sum() / cue_sig.sum())
     padded = _signal([(c.start_ms, c.end_ms) for c in talk], n, COVER_PAD_MS)
     covered = float((padded * speech_sig).sum() / speech_sig.sum())
-    return SyncMeasure(offset, drift, round(ratio, 3), round(on_speech, 3), round(covered, 3), len(talk))
+    return SyncMeasure(offset, drift, ratio, round(on_speech, 3), round(covered, 3), len(talk))

@@ -14,17 +14,21 @@ in `SubStudio/CLAUDE.md` or `SubStudio/.claude/rules/*.md`. Map: `doc/harness-mi
 ### The commands that actually exist here
 
 ```bash
-# Free RAM is the shared limit (STEWARD, 2026-11-19, workspace doc/04): next build, a whole-project tsc and the
-# full test suite wait behind model runs through the heavy lease. Single test files and reads stay free.
-H="python3 -I C:/Users/cyril/Documents/Workspace/doc/_tools/threads.py with heavy --"
+# Memory-heavy jobs share ONE lease (Steward, 2026-11-19, workspace doc/04): a full pytest run (x3), `next build`,
+# and every model run go through `threads.py with heavy`; --min-free-mb waits for that much free RAM, else exits 3
+# without running. T="python3 -I C:/Users/cyril/Documents/Workspace/doc/_tools/threads.py"
+#   full suite x3 : $T with heavy --min-free-mb 1500 -- .venv/Scripts/python.exe -m pytest -q
+#   next build    : $T with heavy --min-free-mb 1500 -- npx next build
+#   Whisper turbo : --min-free-mb 2500 (measured 1.9 GB peak on a 5-min clip, bench/README.md, 2026-11-19)   TranslateGemma 4B : --min-free-mb 4000 (D-0003: 3.9 GB peak)
+# A single test file and tsc stay free. Never pipe the `with` command: its refusal must stop the chain.
 
 # Frontend — natively (Node at C:\Users\cyril\tools\node, 2026-11-19), from frontend/
-$H npx tsc --noEmit
-$H npx next build         # NEXT_PUBLIC_API_URL is baked in here, not read at run time
+npx tsc --noEmit
+npx next build            # NEXT_PUBLIC_API_URL is baked in here, not read at run time (heavy lease, above)
 npm run check:types       # fails when src/lib/api.gen.ts no longer matches backend/api (npm run gen:types)
 
 # Backend — from the repo root, in the worktree's venv (pytest.ini sets the paths)
-$H .venv/Scripts/python.exe -m pytest -q
+.venv/Scripts/python.exe -m pytest -q                       # full suite: heavy lease, above
 python -c "import ast; ast.parse(open('backend/main.py',encoding='utf-8').read())"
 
 # Runtime

@@ -60,6 +60,17 @@ dialogue barely pauses (S05E07 120–420 s, ~22 per half) let each half's offset
 transcript of it read « timing moves −53.5 s » (fixed 2026-11-19; a peak-sharpness guard was rejected because it
 also hid the seeded frame-rate faults). Re-run after the fix: same verdicts, 17 / 17 and 128 / 128.
 
+**The offset needs 80 speech spans in the whole video** (`sync.MIN_SPEECH_SPANS`, twice the per-half minimum), for the
+same reason: on a 5-min clip whose speech barely pauses (~25 spans) in-sync Whisper cues read −59.9 / −5.9 / −51.0 s
+and a copy shifted +3 s read +0.5 s, so there was no information to find. Below it the offset is not measured
+(None), and the verdict then depends on where the timing came from (`evaluate(..., timing_from_audio=)`):
+- **a transcript, or a translation of one** (the ladder passes `source.rung == Rung.ASR`): its times were made from this
+  very audio, so it passes the sync check;
+- **a kept or downloaded track**: its sync cannot be shown, so it is not kept: « timing not checked: too little speech
+  in this video to measure the sync », and the language falls through to the next rung.
+Consequence: a human track on a short video (under roughly 8 minutes of ordinary dialogue) is always redone. Every
+Ghosts episode holds 142+ spans, so the corpus verdicts do not move.
+
 ## Limits of this proof
 
 - One series, one language (English), one episode length (21 min), all broadcast captions. A downloaded fan subtitle,

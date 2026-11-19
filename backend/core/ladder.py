@@ -229,7 +229,10 @@ class Ladder:
         # Wrapped at the gate's own line limit: one number, so SubStudio's wrapping can never fail its own gate.
         cell.cues = wrap_lines(cell.cues, THRESHOLDS["max_line_chars"])
         translated = source.language != cell.language
-        why = await self._verdict(cell.cues, cell.language, source=source.cues if translated else None)
+        # A transcript's times come from this very audio, and a translation keeps its source's times by id: so for an
+        # ASR source, a sync the gate cannot measure (a short clip) is not a fault; for a human track it is.
+        why = await self._verdict(cell.cues, cell.language, source=source.cues if translated else None,
+                                  timing_from_audio=source.rung == Rung.ASR)
         if why:
             cell.state, cell.reason, cell.cues = CellState.FAILED, why, None
             return False
@@ -249,13 +252,14 @@ class Ladder:
         return None
 
     def _verdict_now(self, cues: List[Cue], lang: str, label: Optional[str] = None,
-                     source: Optional[List[Cue]] = None) -> Optional[str]:
+                     source: Optional[List[Cue]] = None, timing_from_audio: bool = False) -> Optional[str]:
         """The gate on `cues` for `lang` (blocking; speech already read): None when it passes, else its sentence."""
         if self.deps.gate is None:
             return None
         spans, duration_ms = self.run.speech
         try:
-            v = self.deps.gate(cues, spans, lang, label=label, duration_ms=duration_ms, source=source)
+            v = self.deps.gate(cues, spans, lang, label=label, duration_ms=duration_ms, source=source,
+                               timing_from_audio=timing_from_audio)
         except JobAborted:
             raise
         except Exception as e:  # e.g. « no speech detected: sync cannot be measured »: unchecked, so not passed
@@ -263,12 +267,12 @@ class Ladder:
         return None if v.passed else (v.reason or "rejected by the quality gate")
 
     async def _verdict(self, cues: List[Cue], lang: str, label: Optional[str] = None,
-                       source: Optional[List[Cue]] = None) -> Optional[str]:
+                       source: Optional[List[Cue]] = None, timing_from_audio: bool = False) -> Optional[str]:
         """None when the gate passes `cues` for `lang`, else its one sentence (Verdict.reason)."""
         unchecked = await self._speech_ready()
         if unchecked:
             return unchecked
-        return await asyncio.to_thread(self._verdict_now, cues, lang, label, source)
+        return await asyncio.to_thread(self._verdict_now, cues, lang, label, source, timing_from_audio)
 
     async def asr(self) -> Source:
         if self.run.asr is None:

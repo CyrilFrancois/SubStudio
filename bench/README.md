@@ -33,15 +33,33 @@ before the winget install still finds it).
 one per encoding family: S05E01 H.264 720p HDTV, S05E02 HEVC 1080p, S05E07 H.264 1080p WEB, each from 2:00 to 7:00.
 `python -m bench.make_clips bench/clips.local.json` rebuilds them into `bench/clips/<id>/`.
 
-**No reference subtitles yet.** The subtitle tracks inside those videos were made by an older SubStudio and are not
-references (SubStudio/CLAUDE.md, « Phase and what it forbids »). Until human subtitles for the same episodes are
-added to a manifest entry's `refs`, the clips measure speed and footprint, not quality.
+**English references (2026-11-19):** the « English (SDH) » tracks of S05E02 and S05E07 are human broadcast captions
+that the quality gate measured in sync, agreeing with ffsubsync (`doc/gate-bench.md`). Their manifest entries carry
+`"refs": {"en": {"stream": 0}}`, cut to the clip window as `bench/clips/<id>/ref.en.srt`. S05E01 has no subtitle
+track, so it measures speed and footprint only. French references still wait for a human French subtitle of these
+episodes.
+
+**First quality score (2026-11-19, `bench/results/results.jsonl`):** SubStudio's production English transcription
+(`core.transcriber.VideoTranscriber`, Whisper turbo int8 + VAD, lines wrapped at the gate's 47 characters) against
+those references:
+
+| Clip | chrF window | chrF doc | doc, SDH speaker names and sound cues removed | Minutes / 5-min clip | Peak RAM | Peak / mean threads |
+|---|---|---|---|---|---|---|
+| S05E02 HEVC 1080p | 85.9 | 87.2 | 90.7 | 4.9 | 1.9 GB | 4.06 / 3.17 |
+| S05E07 H.264 1080p WEB | 83.0 | 84.5 | 89.2 | 4.3 | 1.9 GB | 4.09 / 3.52 |
+
+Every 30 s window of the reference has text from the candidate. The scorer was checked both ways: a reference
+against itself reads 100, S05E02's transcript against S05E07's reference reads 23.6. Most of the remaining gap is
+caption style (speaker names, sound cues, captions shortening speech), not mishearing. The meter marks both runs
+`within_budget: false` for a peak just over 4 threads (4.06–4.09), while the mean stays at 3.2–3.5.
 
 ## Measuring one candidate
 
 ```bash
-# 1. Run the candidate under the meter (take `threads.py lease heavy` first: one model at a time on this PC)
-.venv/Scripts/python.exe -m bench.measure --out bench/clips/s05e02-hevc-1080p/run.json -- <command producing out.en.srt>
+# 1. Run the candidate under the meter, through the heavy lease (one model at a time on this PC; it waits for the
+#    lease and the free RAM, runs, always releases; exit 3 = not run)
+python3 -I C:/Users/cyril/Documents/Workspace/doc/_tools/threads.py with heavy --min-free-mb 2500 -- \
+  .venv/Scripts/python.exe -m bench.measure --out bench/clips/s05e02-hevc-1080p/run.json -- <command producing out.en.srt>
 # 2. Score it against the human reference of the same clip and language
 .venv/Scripts/python.exe -m bench.score --clip s05e02-hevc-1080p --label "turbo-int8-vad" \
   --hyp out.en.srt --ref bench/clips/s05e02-hevc-1080p/ref.en.srt --measure bench/clips/s05e02-hevc-1080p/run.json
