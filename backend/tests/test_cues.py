@@ -20,11 +20,20 @@ def test_cp1252_sidecar_keeps_its_accents(tmp_path):
     ("Příliš žluťoučký kůň úpěl ďábelské ódy. Děkuji. Dobrý den, jak se máte?", "cp1250"),
     ("Zażółć gęślą jaźń. Dzień dobry, jak się masz? Dziękuję bardzo.", "cp1250"),
     ("Привет, как дела? Спасибо, всё хорошо. До завтра.", "cp1251"),
+    ("Γεια σου, τι κάνεις; Ευχαριστώ πολύ, είμαι καλά.", "cp1253"),
+    ("Bonjour Hélène.", "cp1252"),  # short French: charset-normalizer alone says johab
 ])
 def test_legacy_code_page_follows_the_language(tmp_path, text, encoding):
     p = tmp_path / "x.srt"
     p.write_bytes(f"1\n00:00:01,000 --> 00:00:02,000\n{text}\n".encode(encoding))
     assert load_file(p)[0].text == text
+
+
+@pytest.mark.parametrize("encoding", ["utf-16", "utf-16-le", "utf-16-be"])
+def test_utf16_sidecar_notepad_unicode(tmp_path, encoding):
+    p = tmp_path / "x.srt"
+    p.write_bytes(FR_SRT.encode(encoding))
+    assert load_file(p)[0].text == "Ça va, Hélène ? Très bien."
 
 
 def test_utf8_bom_and_crlf(tmp_path):
@@ -69,6 +78,8 @@ def test_shift_clamps_at_zero_and_drops_cues_pushed_before_it():
     moved = shift(cues, -2.6)
     assert [(c.id, c.start_ms, c.end_ms) for c in moved] == [(2, 400, 1400)]
     assert shift(cues, -1.2)[0].start_ms == 0
+    flash = parse("1\n00:00:01,000 --> 00:00:01,000\nA\n")
+    assert [(c.start_ms, c.end_ms) for c in shift(flash, 0.5)] == [(1500, 1500)]  # zero-length cues survive a sync
 
 
 def test_drop_after_removes_cues_starting_past_the_end():
@@ -81,3 +92,5 @@ def test_wrap_splits_long_lines_at_the_middle_space():
     cues = parse("1\n00:00:01,000 --> 00:00:02,000\n" + "word " * 14 + "end\n")
     lines = wrap_lines(cues, 50)[0].text.split("\n")
     assert len(lines) == 2 and all(len(l) <= 50 for l in lines)
+    very_long = parse("1\n00:00:01,000 --> 00:00:02,000\n" + "word " * 26 + "end\n")
+    assert all(len(l) <= 50 for l in wrap_lines(very_long, 50)[0].text.split("\n"))

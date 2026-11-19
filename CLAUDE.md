@@ -96,9 +96,9 @@ What is specific to SubStudio; the rest of the working method is workspace `CLAU
 - **Deep fix, never workaround** (workspace `CLAUDE.md` §4), with SubStudio's own examples:
 
   Two specific traps:
-  1. **Asking the LLM to behave is a hope, not a fix.** `translator._build_system_prompt` tells the
-     model to preserve indices and timestamps. It mostly does. If a value is *computable*, compute
-     and enforce it in Python rather than adding another sentence to the prompt.
+  1. **Asking the LLM to behave is a hope, not a fix.** The translator used to be asked to keep SRT
+     indices and timestamps; now it never sees a timing (`core/subtitles`, ids only). If a value is
+     *computable*, compute and enforce it in Python rather than adding another sentence to the prompt.
   2. **A detector is an alarm, not a repair.** Logging that something went wrong is right, but a
      run where it fires is still broken. Ship the detection *and* the repair.
   3. **The symptom cleared downstream.** If the error count is green but the invariant is still
@@ -106,9 +106,8 @@ What is specific to SubStudio; the rest of the working method is workspace `CLAU
      if you can write "each patch was a workaround for the same thing", the refactor is the task.
      A bigger fix is not a reason to defer it: say so and start it.
 
-  Generated output is checked against its inputs: every index and timestamp the model returns is
-  matched to the source blocks *by position computed in Python*, never by text a translation
-  changes. Prompt only for what needs judgement; gate the rest deterministically.
+  Generated output is checked against its inputs: every answer is matched to the source cues *by
+  id*, a batch whose id set differs is rejected, and timings come from the source only. Prompt only for what needs judgement; gate the rest deterministically.
 
 - **A comment is not a mechanism.** "Keep these in sync" is not what keeps backend JSON and
   `types.ts` in sync — one source, or a check, is.
