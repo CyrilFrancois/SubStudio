@@ -39,6 +39,10 @@ class LlamaServer:
             for path, what in ((self.binary, "LLAMA_SERVER_BIN"), (self.model, "LLAMA_MODEL_PATH")):
                 if not path or not os.path.isfile(path):
                     raise RuntimeError(f"{what} does not point to a file: {path!r}")
+            if self._answers():
+                # An orphan (a crashed backend's server, a bench run) would answer our /health and translate with
+                # whatever model it holds, while our own process fails to bind and exits.
+                raise RuntimeError(f"port {self.port} is already served by another process: stop it or set LLAMA_PORT")
             args = [self.binary, "-m", self.model, "--host", "127.0.0.1", "--port", str(self.port),
                     "--threads", str(THREADS), "--threads-batch", str(THREADS), "-c", str(CONTEXT),
                     "-np", "1", "-ngl", str(self.gpu_layers), "--no-webui"]
@@ -52,12 +56,9 @@ class LlamaServer:
             while time.time() - t0 < START_TIMEOUT_S:
                 if self._proc.poll() is not None:
                     raise RuntimeError(f"llama-server exited with code {self._proc.returncode}: {self._log_tail()}")
-                try:
-                    if httpx.get(f"{self.url}/health", timeout=2).status_code == 200:
-                        logger.info(f"Translation model ready in {time.time() - t0:.0f} s")
-                        return self.url
-                except httpx.HTTPError:
-                    pass
+                if self._answers():
+                    logger.info(f"Translation model ready in {time.time() - t0:.0f} s")
+                    return self.url
                 time.sleep(0.5)
             self._kill()
             raise RuntimeError(f"llama-server not ready after {START_TIMEOUT_S} s: {self._log_tail()}")
@@ -77,6 +78,12 @@ class LlamaServer:
                 self._proc.kill()
                 self._proc.wait(15)
         self._proc = None
+
+    def _answers(self) -> bool:
+        try:
+            return httpx.get(f"{self.url}/health", timeout=2).status_code == 200
+        except httpx.HTTPError:
+            return False
 
     def _log_tail(self) -> str:
         try:

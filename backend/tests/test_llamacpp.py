@@ -1,20 +1,25 @@
 # test_llamacpp.py — LlamaCppTranslator against a fake llama-server: prompt, parsing by id, truncation, backend choice. Exports: none (pytest).
 
+import http.server
 import json
+import socket
+import sys
+import threading
 
 import httpx
 import pytest
 
 from core.subtitles import BatchMismatch, Cue, TranslationContext, TranslationFailed, translate_cues
 from core.translators import make_translator, source_language
+from core.translators.llama_server import LlamaServer
 from core.translators.llamacpp import LlamaCppTranslator
 
 # The shape of TranslateGemma's real template (languages map, raise_exception on an unknown code), shortened.
 TEMPLATE = (
     "{%- set languages = {'en': 'English', 'fr': 'French'} -%}"
     "{{ bos_token }}{%- for m in messages -%}{%- set c = m['content'][0] -%}"
-    "{%- if c['target_lang_code'] not in languages -%}{{ raise_exception('unsupported ' + c['target_lang_code']) }}"
-    "{%- endif -%}<start_of_turn>user\n{{ languages[c['source_lang_code']] }} to {{ languages[c['target_lang_code']] }}"
+    "{%- for code in [c['source_lang_code'], c['target_lang_code']] -%}{%- if code not in languages -%}"
+    "{{ raise_exception('unsupported ' + code) }}{%- endif -%}{%- endfor -%}<start_of_turn>user\n{{ languages[c['source_lang_code']] }} to {{ languages[c['target_lang_code']] }}"
     ":\n\n\n{{ c['text'] | trim }}<end_of_turn>\n{%- endfor -%}<start_of_turn>model\n"
 )
 
@@ -103,11 +108,49 @@ def test_unknown_source_language_fails_the_language_loudly_not_silently():
     assert fake.prompts == []
 
 
-def test_a_language_the_model_does_not_know_raises_before_any_text_is_sent():
+@pytest.mark.parametrize("source, target", [("en", "xx"), ("xx", "fr")])
+def test_a_language_the_model_does_not_know_raises_before_any_text_is_sent(source, target):
     t, fake = translator(echo_upper)
     with pytest.raises(ValueError, match="unsupported xx"):
-        t.translate([{"id": 1, "text": "one"}], "xx", CTX)
+        t.translate([{"id": 1, "text": "one"}], target, TranslationContext(source_lang=source))
     assert fake.prompts == []
+
+
+def test_server_refuses_a_missing_binary(tmp_path):
+    s = LlamaServer(binary=str(tmp_path / "nope.exe"), model=__file__, port=_free_port(), gpu_layers=0, log_dir=tmp_path)
+    with pytest.raises(RuntimeError, match="LLAMA_SERVER_BIN"):
+        s.ensure_running()
+
+
+def test_server_that_exits_at_start_raises_with_its_log(tmp_path):
+    # Python handed llama-server's arguments exits at once with a usage error: the shape of a bad model file.
+    s = LlamaServer(binary=sys.executable, model=__file__, port=_free_port(), gpu_layers=0, log_dir=tmp_path)
+    with pytest.raises(RuntimeError, match="exited with code"):
+        s.ensure_running()
+
+
+def test_server_never_reuses_an_orphan_on_its_port(tmp_path):
+    class Health(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200); self.end_headers()
+
+        def log_message(self, *a):
+            pass
+    orphan = http.server.HTTPServer(("127.0.0.1", 0), Health)
+    threading.Thread(target=orphan.serve_forever, daemon=True).start()
+    try:
+        s = LlamaServer(binary=sys.executable, model=__file__, port=orphan.server_address[1], gpu_layers=0,
+                        log_dir=tmp_path)
+        with pytest.raises(RuntimeError, match="already served"):
+            s.ensure_running()
+    finally:
+        orphan.shutdown()
+
+
+def _free_port():
+    with socket.socket() as so:
+        so.bind(("127.0.0.1", 0))
+        return so.getsockname()[1]
 
 
 def test_backend_choice(monkeypatch):
@@ -126,3 +169,6 @@ def test_source_language_detected_once_over_the_whole_file():
         for i in range(2, 6)]
     assert source_language(cues) == "fr"
     assert source_language([Cue(id=1, start_ms=0, end_ms=1, text="♪ ♪")]) is None
+    # langdetect says « zh-cn »; the model's template only knows « zh »
+    zh = [Cue(id=1, start_ms=0, end_ms=1, text="我不知道你在说什么，但是这很好。我们明天再见吧。")]
+    assert source_language(zh) == "zh"

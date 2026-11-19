@@ -64,6 +64,9 @@ class PipelineOrchestrator:
         self.scanner = VideoScanner(base_path=MEDIA_ROOT)
         self.transcriber = VideoTranscriber(model_size="medium")
         self.translator = make_translator()
+        # Two POST /api/process can run batches at once; they share one model server. Without this lock one
+        # video's unload() kills the server under the other's request, and its retry reloads it (D-0001).
+        self._translate_lock = asyncio.Lock()
         self.muxer = VideoMuxer()
         
         self.active_jobs: Set[str] = set()
@@ -166,9 +169,11 @@ class PipelineOrchestrator:
                 cues = shift(cues, video.syncOffset)
 
             # STEP 4: TRANSLATION — a language that cannot be fully translated fails the video (TranslationFailed)
+            source_lang = await asyncio.to_thread(source_language, cues)  # langdetect is CPU work: off the loop
             translation_ctx = TranslationContext(title=video.name, notes=context, source_is_asr=is_whisper,
-                                                 source_lang=source_language(cues))
+                                                 source_lang=source_lang)
             translated_map = {}
+            await self._translate_lock.acquire()
             try:
                 for lang_code in video.out:
                     job.raise_if_aborted()
@@ -188,7 +193,10 @@ class PipelineOrchestrator:
                     translated_map[lang_code] = translated
             finally:
                 # One heavy model at a time (D-0001): free the translation model before the next transcription.
-                await asyncio.to_thread(self.translator.unload)
+                try:
+                    await asyncio.to_thread(self.translator.unload)
+                finally:
+                    self._translate_lock.release()
 
             # Written only once EVERY language succeeded: a video that ends in error leaves no partial output.
             if opts.generateSRT:

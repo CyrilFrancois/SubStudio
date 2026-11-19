@@ -24,8 +24,15 @@ Claude threads, VS Code and ImmA's Docker stack, host CPU 92–100 % before each
 | TranslateGemma 4B Q4_K_M | 1 cue / call, iGPU | 7.9 | 3.4 | 3.4 GB | 42.1 | 42.3 | 0 |
 | Qwen3-4B-Instruct-2507 Q4_K_M | 10 cues / call, iGPU | 5.1 | 3.2 | 3.7 GB | 44.3 | 44.3 | 0 / 15 |
 | HY-MT1.5-1.8B Q8_0 | 10 cues / call, iGPU | 3.6 | 4.6 | 2.7 GB | 38.3 | 42.6 | **2 / 15** (15 cues) |
-| NLLB-200-distilled-1.3B, CT2 int8 | 16 sentences, CPU 4 thr., beam 4 | 7.3 | n/a | 1.7 GB | 50.8 | 50.7 | 0 |
+| NLLB-200-distilled-1.3B, CT2 int8 | 16 sentences, CPU 4 thr., beam 4 | 7.3 | n/a | 1.7 GB ¹ | 50.8 | 50.7 | 0 |
 | TranslateGemma 4B Q8_0 | — | — | — | needs 4.8 GB | **not run**: 4.3 GB free | | |
+
+Peak RAM is the model process's resident set. ¹ During the NLLB run free system RAM dropped by 4.1 GB (1.1–1.6 GB
+for the llama.cpp runs); another thread's VAD job overlapped it, so how much of that is NLLB's is not known.
+The first row of `results.jsonl` is a 20-cue HY-MT smoke test, not part of the comparison.
+**Lines echoed untranslated:** TranslateGemma returned 3 of 150 lines unchanged (« Lame. », « ♪ », « Assassin ! »),
+Qwen3 4, HY-MT 2. The translator does not reject an echo (« OK. », a name, « ♪ » are legitimate); the quality gate's
+« no cue left in the source language » check is what catches a real miss.
 
 CPU vs iGPU (llama-bench, HY-MT 1.8B Q8, same busy host): CPU 4 threads 13.5 tok/s prompt, 5.0 tok/s generation;
 Vulkan iGPU 85.5 / 4.7. **The iGPU generates as fast and reads prompts 6× faster while leaving the CPU free** (llama.cpp
