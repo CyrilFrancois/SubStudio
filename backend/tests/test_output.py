@@ -25,6 +25,12 @@ FR = [Cue(1, 500, 2000, "Bonjour."), Cue(2, 2500, 4000, "Au revoir."), Cue(3, 42
 EN = [Cue(1, 500, 2000, "Hello."), Cue(2, 2500, 4000, "Goodbye.")]
 
 
+
+def _upd(source, tracks, languages, **kw):
+    """update_in_place with an origin for every new track (the pipeline always knows it)."""
+    kw.setdefault("origins", {lang: "translated" for lang in tracks})
+    return update_in_place(source, tracks, languages, **kw)
+
 def _sha(p: Path) -> str:
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
@@ -64,7 +70,7 @@ def _no_temp(folder: Path) -> bool:
     ("Ghosts S05E01.mkv", ["en", "fr"], "Ghosts S05E01 (Sub-EN,FR).mkv"),
     ("Film.mp4", ["fr"], "Film (Sub-FR).mkv"),
     ("Ghosts S05E01 (Sub-EN).mkv", ["en", "fr"], "Ghosts S05E01 (Sub-EN,FR).mkv"),   # replaced, never stacked
-    ("Ghosts S05E01 (sub-en,fr).mkv", ["eng", "fre", "en"], "Ghosts S05E01 (Sub-EN,FR).mkv"),
+    ("Ghosts S05E01 (Sub-EN,FR).mkv", ["eng", "fre", "en"], "Ghosts S05E01 (Sub-EN,FR).mkv"),
     ("Été à Zürich 東京.mkv", ["fr"], "Été à Zürich 東京 (Sub-FR).mkv"),
 ])
 def test_marker_lists_actual_languages_once(name, langs, expected):
@@ -81,7 +87,7 @@ def test_marker_refuses_ov_unresolved():
 def test_nothing_new_leaves_the_file_untouched_and_unrenamed(tmp_path):
     src = _mkv_with_sdh(tmp_path)
     before = _sha(src)
-    result = update_in_place(src, {}, ["en"])
+    result = _upd(src, {}, ["en"])
     assert result.status == "untouched" and result.path == src
     assert _sha(src) == before and sorted(p.name for p in tmp_path.iterdir()) == [src.name]
 
@@ -89,7 +95,7 @@ def test_nothing_new_leaves_the_file_untouched_and_unrenamed(tmp_path):
 def test_mkv_gets_new_tracks_marker_and_keeps_existing(tmp_path):
     src = _mkv_with_sdh(tmp_path)
     av_before = inplace._signature(inplace._probe(src))
-    result = update_in_place(src, {"fr": FR}, ["en", "fr"])
+    result = _upd(src, {"fr": FR}, ["en", "fr"])
 
     assert result.status == "updated" and result.marker == "(Sub-EN,FR)"
     assert result.path.name == "Ghosts S05E01 (Sub-EN,FR).mkv"
@@ -101,8 +107,8 @@ def test_mkv_gets_new_tracks_marker_and_keeps_existing(tmp_path):
 
 
 def test_rerun_replaces_our_track_and_marker_never_stacks(tmp_path):
-    first = update_in_place(_mkv_with_sdh(tmp_path), {"fr": FR}, ["en", "fr"]).path
-    again = update_in_place(first, {"fr": FR[:2], "de": EN}, ["en", "fr", "de"])
+    first = _upd(_mkv_with_sdh(tmp_path), {"fr": FR}, ["en", "fr"]).path
+    again = _upd(first, {"fr": FR[:2], "de": EN}, ["en", "fr", "de"])
     assert again.path.name == "Ghosts S05E01 (Sub-EN,FR,DE).mkv" and not first.exists()
     subs = _subs(again.path)
     assert [t for _, _, t in subs] == ["English (SDH)", "SubStudio fr", "SubStudio de"]
@@ -110,15 +116,15 @@ def test_rerun_replaces_our_track_and_marker_never_stacks(tmp_path):
 
 
 def test_same_name_rerun_swaps_atomically_onto_the_source(tmp_path):
-    first = update_in_place(_mkv_with_sdh(tmp_path), {"fr": FR}, ["en", "fr"]).path
-    again = update_in_place(first, {"fr": FR[:1]}, ["en", "fr"])
+    first = _upd(_mkv_with_sdh(tmp_path), {"fr": FR}, ["en", "fr"]).path
+    again = _upd(first, {"fr": FR[:1]}, ["en", "fr"])
     assert again.path == first and first.exists() and _no_temp(tmp_path)
     assert inplace._decoded_cue_count(first, 1) == 1
 
 
 def test_mp4_becomes_mkv_and_its_mov_text_survives_as_srt(tmp_path):
     src = _mp4_with_mov_text(tmp_path)
-    result = update_in_place(src, {"fr": FR}, ["en", "fr"])
+    result = _upd(src, {"fr": FR}, ["en", "fr"])
     assert result.path.name == "Film (Sub-EN,FR).mkv" and not src.exists() and _no_temp(tmp_path)
     assert _subs(result.path) == [("subrip", "eng", None), ("subrip", "fre", "SubStudio fr")]
 
@@ -126,7 +132,7 @@ def test_mp4_becomes_mkv_and_its_mov_text_survives_as_srt(tmp_path):
 def test_cues_past_the_end_are_dropped_and_counted_right(tmp_path):
     src = _mkv_with_sdh(tmp_path)
     late = FR + [Cue(4, 6000, 7000, "Après la fin.")]
-    result = update_in_place(src, {"fr": late}, ["en", "fr"])
+    result = _upd(src, {"fr": late}, ["en", "fr"])
     assert inplace._decoded_cue_count(result.path, 1) == 3
 
 
@@ -149,7 +155,7 @@ def test_failed_verify_leaves_source_byte_identical(tmp_path, monkeypatch):
 
     monkeypatch.setattr(inplace, "_mux_args", truncated)
     with pytest.raises(OutputError, match="duration"):
-        update_in_place(src, {"fr": FR[:1]}, ["en", "fr"])
+        _upd(src, {"fr": FR[:1]}, ["en", "fr"])
     _assert_source_intact(src, before)
 
 
@@ -165,7 +171,7 @@ def test_failed_verify_on_lost_audio(tmp_path, monkeypatch):
 
     monkeypatch.setattr(inplace, "_mux_args", no_audio)
     with pytest.raises(OutputError, match="audio differ"):
-        update_in_place(src, {"fr": FR}, ["en", "fr"])
+        _upd(src, {"fr": FR}, ["en", "fr"])
     _assert_source_intact(src, before)
 
 
@@ -175,7 +181,7 @@ def test_ffmpeg_failure_leaves_source_byte_identical(tmp_path, monkeypatch):
     real = inplace._mux_args
     monkeypatch.setattr(inplace, "_mux_args", lambda *a: real(*a)[:-1] + ["-bogus-option", str(a[-1])])
     with pytest.raises(OutputError, match="ffmpeg"):
-        update_in_place(src, {"fr": FR}, ["en", "fr"])
+        _upd(src, {"fr": FR}, ["en", "fr"])
     _assert_source_intact(src, before)
 
 
@@ -185,7 +191,7 @@ def test_not_enough_disk_writes_nothing(tmp_path, monkeypatch):
     Usage = namedtuple("Usage", "total used free")
     monkeypatch.setattr(inplace.shutil, "disk_usage", lambda _: Usage(10, 10, 1))
     with pytest.raises(OutputError, match="free disk"):
-        update_in_place(src, {"fr": FR}, ["en", "fr"])
+        _upd(src, {"fr": FR}, ["en", "fr"])
     _assert_source_intact(src, before)
 
 
@@ -194,7 +200,7 @@ def test_existing_target_name_is_never_overwritten(tmp_path):
     other = tmp_path / "Ghosts S05E01 (Sub-EN,FR).mkv"
     other.write_bytes(b"someone else's file")
     with pytest.raises(OutputError, match="already exists"):
-        update_in_place(src, {"fr": FR}, ["en", "fr"])
+        _upd(src, {"fr": FR}, ["en", "fr"])
     assert other.read_bytes() == b"someone else's file" and src.exists() and _no_temp(tmp_path)
 
 
@@ -202,14 +208,14 @@ def test_every_cue_past_the_end_fails_loudly(tmp_path):
     src = _mkv_with_sdh(tmp_path)
     before = _sha(src)
     with pytest.raises(OutputError, match="after the end"):
-        update_in_place(src, {"fr": [Cue(1, 9000, 9500, "Trop tard.")]}, ["en", "fr"])
+        _upd(src, {"fr": [Cue(1, 9000, 9500, "Trop tard.")]}, ["en", "fr"])
     _assert_source_intact(src, before)
 
 
 def test_written_language_must_be_validated(tmp_path):
     src = _mkv_with_sdh(tmp_path)
     with pytest.raises(ValueError):
-        update_in_place(src, {"fr": FR}, ["en"])
+        _upd(src, {"fr": FR}, ["en"])
 
 
 # ---------------------------------------------------------------- review findings, 2026-11-19
@@ -237,9 +243,9 @@ def _mkv_with_chapters(folder: Path) -> Path:
 def test_cover_art_survives_mp4_to_mkv(tmp_path):
     src = _mp4_with_cover(tmp_path)
     assert inplace._signature(inplace._probe(src))["covers"] == 1     # the fixture really has a cover
-    result = update_in_place(src, {"fr": FR}, ["fr"])
+    result = _upd(src, {"fr": FR}, ["fr"])
     assert inplace._signature(inplace._probe(result.path))["covers"] == 1
-    again = update_in_place(result.path, {"de": EN}, ["fr", "de"])     # an MKV cover survives a second swap too
+    again = _upd(result.path, {"de": EN}, ["fr", "de"])     # an MKV cover survives a second swap too
     sig = inplace._signature(inplace._probe(again.path))
     assert sig["covers"] == 1 and [c for c, _ in sig["video"]] == ["mpeg4"]
 
@@ -247,7 +253,7 @@ def test_cover_art_survives_mp4_to_mkv(tmp_path):
 def test_chapters_survive(tmp_path):
     src = _mkv_with_chapters(tmp_path)
     assert inplace._signature(inplace._probe(src))["chapters"] == 2
-    result = update_in_place(src, {"fr": FR}, ["fr"])
+    result = _upd(src, {"fr": FR}, ["fr"])
     assert inplace._signature(inplace._probe(result.path))["chapters"] == 2
 
 
@@ -257,13 +263,13 @@ def test_lost_existing_subtitle_fails_verify(tmp_path, monkeypatch):
     monkeypatch.setattr(inplace, "_kept_subs", lambda info, langs: [])   # the mux forgets the SDH track…
     real_verify = inplace._verify
 
-    def verify_against_truth(source_info, tmp, expected):                # …but the check knows it was there
+    def verify_against_truth(source_info, tmp, expected, origins=None):  # …but the check knows it was there
         monkeypatch.undo()
-        real_verify(source_info, tmp, expected)
+        real_verify(source_info, tmp, expected, origins)
 
     monkeypatch.setattr(inplace, "_verify", verify_against_truth)
     with pytest.raises(OutputError, match="subtitle tracks were not all kept"):
-        update_in_place(src, {"fr": FR}, ["en", "fr"])
+        _upd(src, {"fr": FR}, ["en", "fr"])
     _assert_source_intact(src, before)
 
 
@@ -273,8 +279,8 @@ def test_a_user_file_named_like_a_temp_is_never_touched(tmp_path):
     for u in users:
         u.write_bytes(b"user file")
     with pytest.raises(OutputError, match="after the end"):
-        update_in_place(src, {"fr": [Cue(1, 9000, 9500, "Trop tard.")]}, ["en", "fr"])
-    update_in_place(src, {"fr": FR}, ["en", "fr"])
+        _upd(src, {"fr": [Cue(1, 9000, 9500, "Trop tard.")]}, ["en", "fr"])
+    _upd(src, {"fr": FR}, ["en", "fr"])
     assert all(u.read_bytes() == b"user file" for u in users)
 
 
@@ -290,7 +296,7 @@ def test_target_appearing_during_the_update_is_never_overwritten(tmp_path, monke
 
     monkeypatch.setattr(inplace, "_verify", verify_then_race)
     with pytest.raises(OutputError, match="appeared"):
-        update_in_place(src, {"fr": FR}, ["en", "fr"])
+        _upd(src, {"fr": FR}, ["en", "fr"])
     assert other.read_bytes() == b"arrived meanwhile" and _sha(src) == before and _no_temp(tmp_path)
 
 
@@ -304,14 +310,14 @@ def test_interrupt_or_cancel_leaves_source_byte_identical(tmp_path, monkeypatch,
 
     monkeypatch.setattr(inplace, "_verify", boom)
     with pytest.raises((KeyboardInterrupt, inplace.JobAborted)):
-        update_in_place(src, {"fr": FR}, ["en", "fr"])
+        _upd(src, {"fr": FR}, ["en", "fr"])
     _assert_source_intact(src, before)
 
 
 def test_same_language_twice_is_refused(tmp_path):
     src = _mkv_with_sdh(tmp_path)
     with pytest.raises(ValueError, match="same language"):
-        update_in_place(src, {"fr": FR, "fre": FR}, ["fr"])
+        _upd(src, {"fr": FR, "fre": FR}, ["fr"])
 
 
 def test_second_concurrent_update_of_one_source_is_refused(tmp_path):
@@ -321,7 +327,33 @@ def test_second_concurrent_update_of_one_source_is_refused(tmp_path):
     assert lock.acquire(blocking=False)
     try:
         with pytest.raises(OutputError, match="already being updated"):
-            update_in_place(src, {"fr": FR}, ["en", "fr"])
+            _upd(src, {"fr": FR}, ["en", "fr"])
     finally:
         lock.release()
     _assert_source_intact(src, before)
+
+
+
+def test_origin_is_recorded_on_each_new_track(tmp_path):
+    src = _mkv_with_sdh(tmp_path)
+    result = update_in_place(src, {"fr": FR, "de": EN}, ["en", "fr", "de"],
+                             origins={"fr": "downloaded", "de": "transcribed"})
+    tags = {s.get("tags", {}).get("title"): {k.upper(): v for k, v in s.get("tags", {}).items()}
+            for s in inplace._probe(result.path)["streams"] if s["codec_type"] == "subtitle"}
+    assert tags["SubStudio fr"]["SUBSTUDIO_ORIGIN"] == "downloaded"
+    assert tags["SubStudio de"]["SUBSTUDIO_ORIGIN"] == "transcribed"
+    assert "SUBSTUDIO_ORIGIN" not in tags["English (SDH)"]
+
+
+@pytest.mark.parametrize("origins", [{}, {"fr": "kept"}, {"fr": "guessed"}])
+def test_missing_or_invalid_origin_is_refused(tmp_path, origins):
+    src = _mkv_with_sdh(tmp_path)
+    before = _sha(src)
+    with pytest.raises(ValueError, match="origin"):
+        update_in_place(src, {"fr": FR}, ["en", "fr"], origins=origins)
+    _assert_source_intact(src, before)
+
+
+def test_marker_matches_what_the_library_parses():
+    from core.provenance import parse_name_marker
+    assert parse_name_marker(Path(marked_name(Path("Ep (Sub-EN).mp4"), ["en", "fr"])).stem) == ["en", "fr"]

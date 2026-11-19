@@ -201,8 +201,9 @@ def _audio_language(probe: _Probe) -> Optional[str]:
 def _verdicts(path: str, st: os.stat_result) -> Dict[str, str]:
     """Subtitles of this exact file (path + mtime + size) that the quality gate accepted and left
     untouched, as {track_key: origin}. Written by the job store (workspace-64, task « jobs survive a
-    restart »); until it exists there is no record, so nothing unmarked counts."""
-    return {}
+    restart »): api/job_store.verdicts, valid only while the file keeps the mtime and size it was judged at."""
+    from .job_store import job_store
+    return job_store().verdicts(path, st)
 
 
 def _judge(track: SubtitleTrack, settings: Settings, record: Dict[str, str]) -> SubtitleTrack:

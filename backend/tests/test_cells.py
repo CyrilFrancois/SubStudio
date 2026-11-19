@@ -3,6 +3,7 @@
 import asyncio
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -57,11 +58,25 @@ def frames(video):
     return seen, lambda: setattr(event_manager, "emit_cells", original)
 
 
-def process(orch, video, out, clean_up=False):
+def process(orch, video, out):
     job = main.VideoJob(name=video.name, path=str(video), out=list(out), workflowMode="hybrid")
-    opts = main.GlobalOptions(generateSRT=True, muxIntoMkv=True, cleanUp=clean_up)
+    opts = main.GlobalOptions()
     asyncio.run(orch.execute_pipeline(job, opts, 0, 1))
     return job, opts
+
+
+def tracks(video):
+    """(title, language tag, origin tag) of each subtitle track, in order."""
+    import json
+    probe = json.loads(subprocess.run(["ffprobe", "-v", "error", "-print_format", "json", "-show_streams",
+                                       "-select_streams", "s", str(video)], capture_output=True, text=True).stdout)
+    return [(s["tags"].get("title"), s["tags"].get("language"),
+             {k.upper(): v for k, v in s["tags"].items()}.get("SUBSTUDIO_ORIGIN")) for s in probe["streams"]]
+
+
+def track_text(video, index):
+    return subprocess.run(["ffmpeg", "-v", "error", "-i", str(video), "-map", f"0:s:{index}", "-f", "srt", "-"],
+                          capture_output=True).stdout.decode("utf-8")
 
 
 def orchestrator(translator):
@@ -79,8 +94,10 @@ def test_each_language_gets_its_own_verdict_and_origin(clip):
     finally:
         restore()
     cells = {c["language"]: c for c in orch.runs[str(clip)].to_json()}
-    assert cells["en"] == {"language": "en", "state": "passed", "origin": "kept", "rung": "existing", "reason": ""}
-    assert cells["de"]["state"] == "passed" and cells["de"]["origin"] == "translated from en"
+    assert cells["en"] == {"language": "en", "state": "passed", "origin": "kept", "from_language": None,
+                           "origin_label": "kept", "rung": "existing", "reason": "", "attempts": []}
+    assert cells["de"]["state"] == "passed" and cells["de"]["origin_label"] == "translated from en"
+    assert (cells["de"]["origin"], cells["de"]["from_language"]) == ("translated", "en")
     assert cells["fr"]["state"] == "failed" and cells["fr"]["reason"].startswith("fr: tag cannot translate cue")
     assert orch.translator.calls.count("en") == 0          # already English: kept, never sent to a model
     assert [c["state"] for c in seen[0]] == ["pending"] * 3 and seen[-1] == list(cells.values())
@@ -91,24 +108,30 @@ def test_each_language_gets_its_own_verdict_and_origin(clip):
 def test_retry_one_cell_reuses_the_source_and_rebuilds_the_output(clip):
     orch = orchestrator(Tag(broken={"fr"}))
     job, opts = process(orch, clip, ("de", "fr"))
-    assert not clip.with_suffix(".fr.srt").exists()
+    run = orch.runs[str(clip)]
+    first = Path(run.output_path)                          # DE passed: written INTO the video, marker lists DE only
+    assert first.name == "episode (Sub-DE).mkv" and not clip.exists()
+    assert tracks(first) == [("SubStudio de", "ger", "translated")]
     orch.translator.broken.clear()
     orch.translator.calls.clear()
-    asyncio.run(orch.retry_cell(job, "fr", opts))
+    asyncio.run(orch.retry_cell(job, "fr", opts))          # the retry finds the video under its new name
     assert orch.translator.calls == ["fr"]                 # only the failed cell is redone
-    assert orch.runs[str(clip)].all_passed()
-    assert "[fr] Good morning" in clip.with_suffix(".fr.srt").read_text(encoding="utf-8")
-    out = clip.parent / f"{clip.stem}_SubStudio.mkv"
-    tags = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "s", "-show_entries", "stream_tags=language",
-                           "-of", "csv=p=0", str(out)], capture_output=True, text=True).stdout.split()
-    assert tags == ["deu", "fra"]
+    assert run.all_passed()
+    final = Path(run.output_path)
+    assert final.name == "episode (Sub-DE,FR).mkv" and not first.exists()
+    assert tracks(final) == [("SubStudio de", "ger", "translated"), ("SubStudio fr", "fre", "translated")]
+    assert "[fr] Good morning" in track_text(final, 1)
+    assert not list(clip.parent.glob("*.fr.srt"))          # no sidecar copies (D-0002 §4)
     assert event_manager.state_cache[str(clip)]["status"] == "done"
 
 
-def test_clean_up_never_deletes_the_source_while_a_language_failed(clip):
-    # The source is what a retry starts from. (Temp clip only: never cleanUp on real media.)
-    process(orchestrator(Tag(broken={"fr"})), clip, ("de", "fr"), clean_up=True)
-    assert clip.exists()
+def test_a_failed_language_never_costs_the_video(clip):
+    # The video is what a retry starts from: after a partial run it exists, renamed, with the passed language only.
+    orch = orchestrator(Tag(broken={"fr"}))
+    process(orch, clip, ("de", "fr"))
+    now = main.current_path(orch.runs[str(clip)])
+    assert now.is_file() and now.name == "episode (Sub-DE).mkv"
+    assert sorted(p.name for p in clip.parent.iterdir()) == ["episode (Sub-DE).mkv", "episode.srt"]
 
 
 def test_a_transcribed_source_in_the_wanted_language_is_transcribed_not_translated():
@@ -145,18 +168,22 @@ def test_retry_is_refused_while_another_job_runs_or_when_the_source_is_gone(clip
         orch.active_jobs.add("another video")
         assert client.post("/api/retry", json=body).status_code == 409
         orch.active_jobs.discard("another video")
-        moved = clip.with_suffix(".moved")
-        clip.rename(moved)
+        now = main.current_path(orch.runs[str(clip)])     # renamed by the swap: (Sub-DE)
+        moved = now.with_suffix(".moved")
+        now.rename(moved)
         assert client.post("/api/retry", json=body).status_code == 409
-        moved.rename(clip)
+        moved.rename(now)
         assert client.get(f"/api/cells/{clip}").json()["cells"][1]["state"] == "failed"
 
 
 def test_an_abort_mid_cell_ends_it_failed_not_running():
     from core.jobs import JobAborted, JobHandle
     cues = [Cue(id=i + 1, start_ms=i * 1000, end_ms=i * 1000 + 900, text=t) for i, t in enumerate(ENGLISH)]
-    run = main.VideoRun(path="v", source=Source(cues=cues, rung=Rung.TRANSLATE, language="en",
-                                                context=TranslationContext()), cells={"de": Cell("de")})
+    from core.acquire.types import LanguagePlan, Step
+    from core.ladder import Ladder, LadderDeps
+    run = main.VideoRun(path="v", cells={"de": Cell("de")},
+                        plans={"de": LanguagePlan("de", [Step(Rung.TRANSLATE, "de", from_languages=("en",))])},
+                        human={"en": Source(cues=cues, rung=Rung.EXISTING, language="en", context=TranslationContext())})
     handle = JobHandle("v")
 
     class AbortsDuringFirstCall(Tag):
@@ -166,8 +193,10 @@ def test_an_abort_mid_cell_ends_it_failed_not_running():
             return super().translate(cues, target, context)
 
     orch = orchestrator(AbortsDuringFirstCall())
+    ladder = Ladder(run, LadderDeps(translator=orch.translator, transcribe=lambda: ([], None),
+                                    load_embedded=lambda i: [], check_abort=handle.raise_if_aborted))
     with pytest.raises(JobAborted):
-        asyncio.run(orch._run_cell(run, "de", handle, "[t]"))
+        asyncio.run(orch._run_cell(run, ladder, "de", handle, "[t]"))
     assert (run.cells["de"].state, run.cells["de"].reason) == (CellState.FAILED, "cancelled by the user")
 
 
@@ -184,7 +213,8 @@ def test_a_transcription_uses_the_language_whisper_heard(tmp_path):
     orch = orchestrator(Tag())
     orch.transcriber.transcribe = lambda **kw: asr
     job = main.VideoJob(name=video.name, path=str(video), out=["en", "de"], workflowMode="whisper")
-    asyncio.run(orch.execute_pipeline(job, main.GlobalOptions(generateSRT=True, muxIntoMkv=False), 0, 1))
+    asyncio.run(orch.execute_pipeline(job, main.GlobalOptions(), 0, 1))
     cells = {c["language"]: c for c in orch.runs[str(video)].to_json()}
     assert cells["en"]["origin"] == "transcribed" and orch.translator.calls == ["de"]
-    assert cells["de"]["origin"] == "transcribed, translated from en"
+    assert cells["de"]["origin_label"] == "transcribed, translated from en"
+    assert (cells["en"]["origin"], cells["de"]["origin"], cells["de"]["from_language"]) == ("transcribed", "translated", "en")
