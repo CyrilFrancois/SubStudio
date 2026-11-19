@@ -53,6 +53,7 @@ class LadderDeps:
 class Ladder:
     def __init__(self, run: VideoRun, deps: LadderDeps):
         self.run, self.deps = run, deps
+        self._searched = False  # set by human(): this ladder ran rungs 1–2 itself, so fill() never searches again
 
     # --- bookkeeping -------------------------------------------------------------------------------------------
     def _note(self, lang: str, text: str) -> None:
@@ -72,6 +73,7 @@ class Ladder:
     # --- rungs 1–2 ---------------------------------------------------------------------------------------------
     async def human(self) -> None:
         """Rungs 1–2 for every plan; fills run.human and passes the wanted cells they satisfy."""
+        self._searched = True
         to_download: List[str] = []
         for lang, plan in self.run.plans.items():
             self.deps.check_abort()
@@ -110,7 +112,10 @@ class Ladder:
     async def _download(self, langs: List[str]) -> None:
         self.deps.progress("processing", 12, f"Searching online for {', '.join(l.upper() for l in langs)} subtitles...")
         try:
-            result = await asyncio.to_thread(self.deps.fetch, self.run.path, langs, work_dir_for(self.run.path))
+            # The video as it is now (renamed « X (Sub-…).mkv » after a swap, when a retry searches again); the work
+            # folder stays keyed on the queued path so a retry finds the same one.
+            video_now = self.run.output_path or self.run.path
+            result = await asyncio.to_thread(self.deps.fetch, video_now, langs, work_dir_for(self.run.path))
         except JobAborted:
             raise
         except ProvidersUnavailable:
@@ -135,10 +140,28 @@ class Ladder:
                 except Exception as e:
                     self._note(lang, f"download: unreadable file: {str(e)[:120]}")
 
+    async def _search_again(self, lang: str) -> bool:
+        cell, plan = self.run.cells[lang], self.run.plans[lang]
+        earlier = [a for a in cell.attempts if a.startswith("download")]
+        if (self._searched or not self.deps.downloads_enabled or not earlier
+                or not any(s.rung == Rung.DOWNLOAD for s in plan.steps)
+                or any("could not be matched to the audio" in a for a in earlier)):
+            return False
+        # The fresh search replaces the old lines, so the attempts read as what happened on this retry.
+        cell.attempts = [a for a in cell.attempts if not a.startswith("download")]
+        await self._download([lang])
+        return cell.state == CellState.PASSED
+
     # --- rungs 3–4 ---------------------------------------------------------------------------------------------
     async def fill(self, lang: str, on_batch: Optional[Callable[[int, int], None]] = None) -> None:
-        """Rung 3, else 4, for one wanted cell not passed at rungs 1–2. Ends PASSED or FAILED with one sentence."""
+        """Rung 3, else 4, for one wanted cell not passed at rungs 1–2. Ends PASSED or FAILED with one sentence.
+
+        On a retry (a ladder that did not run human() itself), rung 2 is tried again first when the earlier search
+        failed or found nothing: a daily quota resets and sites come back. A download that was found but could not
+        be matched to the audio is not searched again: the same file would come back."""
         cell, plan = self.run.cells[lang], self.run.plans[lang]
+        if await self._search_again(lang):
+            return
         for step in plan.steps:
             if step.rung == Rung.TRANSLATE:
                 # The plan's order first (OV first); then any other human source, e.g. the user's unlabelled pick.
