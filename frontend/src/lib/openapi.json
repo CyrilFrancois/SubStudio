@@ -46,6 +46,18 @@
           "text": {
             "title": "Text",
             "type": "string"
+          },
+          "untranslated_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set on GET when the file records this line as left in that language (SUBSTUDIO_UNTRANSLATED); 'und' when the language was not recorded. Ignored on PUT.",
+            "title": "Untranslated From"
           }
         },
         "required": [
@@ -556,6 +568,12 @@
             ],
             "title": "State",
             "type": "string"
+          },
+          "untranslated": {
+            "default": 0,
+            "description": "Set when state is 'passed': lines the translation left in from_language.",
+            "title": "Untranslated",
+            "type": "integer"
           }
         },
         "required": [
@@ -946,6 +964,18 @@
             "title": "Counted",
             "type": "boolean"
           },
+          "from_language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "SubStudio translations: the language it was translated from (SUBSTUDIO_FROM tag).",
+            "title": "From Language"
+          },
           "kind": {
             "enum": [
               "embedded",
@@ -1054,6 +1084,12 @@
               }
             ],
             "title": "Title"
+          },
+          "untranslated": {
+            "default": 0,
+            "description": "SubStudio translations: lines still in from_language (SUBSTUDIO_UNTRANSLATED tag).",
+            "title": "Untranslated",
+            "type": "integer"
           }
         },
         "required": [

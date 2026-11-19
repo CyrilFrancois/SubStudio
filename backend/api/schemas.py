@@ -44,6 +44,8 @@ class SubtitleTrack(BaseModel):
     origin: Optional[Literal["kept", "downloaded", "translated", "transcribed"]] = Field(
         None, description="SubStudio tracks only: the SUBSTUDIO_ORIGIN stream tag, null when not recorded.")
     reviewed: bool = Field(False, description="A person saved it in the Review screen (SUBSTUDIO_REVIEWED tag, core/provenance).")
+    from_language: Optional[LanguageCode] = Field(None, description="SubStudio translations: the language it was translated from (SUBSTUDIO_FROM tag).")
+    untranslated: int = Field(0, description="SubStudio translations: lines still in from_language (SUBSTUDIO_UNTRANSLATED tag).")
     counted: bool = Field(..., description="True when this track counts as coverage for its language.")
     reason: Optional[str] = Field(None, description="One sentence when counted is false, e.g. 'not made by this SubStudio (Settings)'.")
 
@@ -57,6 +59,7 @@ class LanguageCoverage(BaseModel):
     from_language: Optional[LanguageCode] = Field(None, description="For translated/transcribed+translated: the source language.")
     path: Optional[str] = Field(None, description="Sidecar path when the subtitle is a file.")
     reviewed: bool = Field(False, description="Set when state is 'passed' and a person saved this subtitle in Review.")
+    untranslated: int = Field(0, description="Set when state is 'passed': lines the translation left in from_language.")
     job_id: Optional[str] = Field(None, description="Set when state is queued/running/failed.")
     reason: Optional[str] = Field(None, description="One sentence: why it failed, why it is unknown, or what was ignored.")
 
@@ -176,6 +179,9 @@ class Cue(BaseModel):
     end_ms: int
     text: str
     source_text: Optional[str] = Field(None, description="The cue it was translated from, when translated.")
+    untranslated_from: Optional[LanguageCode] = Field(
+        None, description="Set on GET when the file records this line as left in that language (SUBSTUDIO_UNTRANSLATED); "
+                          "'und' when the language was not recorded. Ignored on PUT.")
     flags: List[CueFlag] = Field(default_factory=list, description="Set by the backend on GET; ignored on PUT.")
 
 

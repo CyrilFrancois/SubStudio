@@ -27,8 +27,8 @@ from babelfish import Language
 
 from ..acquire.plan import normalize_language
 from ..jobs import JobHandle
-from ..provenance import (ORIGIN_TAG, ORIGINS, REVIEWED_TAG, REVIEWED_YES, name_marker, strip_name_marker,
-                          substudio_track_title)
+from ..provenance import (FROM_TAG, ORIGIN_TAG, ORIGINS, REVIEWED_TAG, REVIEWED_YES, UNTRANSLATED_TAG, cue_ids_value,
+                          name_marker, strip_name_marker, substudio_track_title)
 from ..subtitles import Cue, drop_after, to_srt
 from .media import (_TEXT_TO_SRT, OutputBusy, OutputError, _disposition, _duration, _is_cover, _kept_subs, _probe,
                     _untagged_audio,
@@ -117,7 +117,7 @@ def _extract_covers(source: Path, info: dict, work: Path) -> List[tuple]:
 
 def _mux_args(source: Path, info: dict, srt_paths: List[tuple], tmp: Path, covers: Sequence[tuple] = (),
               origins: Mapping[str, str] = {}, reviewed: Collection[str] = (),
-              audio_tag: Optional[str] = None) -> List[str]:
+              audio_tag: Optional[str] = None, extra: Mapping[str, Mapping[str, str]] = {}) -> List[str]:
     """The ffmpeg command writing the temp MKV: every video, audio and attachment stream copied, cover pictures
     re-attached as files, kept subtitles copied (MP4 text → SRT), our replaced tracks dropped, new SRT tracks
     added. Chapters and global metadata follow by ffmpeg's default. Data streams (MP4 timecode) are not carried by
@@ -159,6 +159,8 @@ def _mux_args(source: Path, info: dict, srt_paths: List[tuple], tmp: Path, cover
                 f"-metadata:s:s:{k}", f"{ORIGIN_TAG}={origins[lang]}"]
         if lang in reviewed:
             cmd += [f"-metadata:s:s:{k}", f"{REVIEWED_TAG}={REVIEWED_YES}"]
+        for key, value in extra.get(lang, {}).items():
+            cmd += [f"-metadata:s:s:{k}", f"{key}={value}"]
     n_att = sum(1 for s in info.get("streams", []) if s.get("codec_type") == "attachment")
     for j, (p, mime, name) in enumerate(covers):
         cmd += ["-attach", str(p), f"-metadata:s:t:{n_att + j}", f"mimetype={mime}",
@@ -211,6 +213,8 @@ def update_in_place(
     origins: Mapping[str, str],
     reviewed: Collection[str] = (),
     audio_language: Optional[str] = None,
+    untranslated: Mapping[str, Collection[int]] = {},
+    from_languages: Mapping[str, str] = {},
     job: Optional[JobHandle] = None,
 ) -> OutputResult:
     """Writes `tracks` ({iso 639-1: cues}) into `source` by the verified swap and renames it with the marker of
@@ -219,7 +223,9 @@ def update_in_place(
     so the Library reads how it was obtained after a rescan. `reviewed` (languages of `tracks`) also get the
     REVIEWED_TAG: a person checked them in the Review screen. `audio_language` (the language the run detected, sure
     enough to trust) is written on the first audio stream only when the source's is untagged or « und »: a tagged
-    stream is never retagged, and the tag alone never causes a swap.
+    stream is never retagged, and the tag alone never causes a swap. `from_languages` ({lang: source language}) and
+    `untranslated` ({lang: ids of `tracks` cues left in that language}) become the FROM_TAG and UNTRANSLATED_TAG of a
+    new track, the ids turned into the track's positions 1..n (a cue past the end is dropped, so it is not listed).
 
     Nothing new → untouched (no rename). Raises OutputError (source unchanged) on any failed step,
     JobAborted (source unchanged) on Cancel."""
@@ -244,19 +250,22 @@ def update_in_place(
         if o not in ORIGINS or o == "kept":
             raise ValueError(f"{lang}: origin must be one of {[x for x in ORIGINS if x != 'kept']}, got {o!r}")
     audio_code = _iso1(audio_language) if audio_language else None
+    left = {_iso1(lang): set(ids) for lang, ids in untranslated.items() if ids}
+    source_lang = {_iso1(lang): _iso1(f) for lang, f in from_languages.items() if f}
 
     lock = _lock_for(source)
     if not lock.acquire(blocking=False):
         raise OutputBusy(f"{source.name} is already being updated by another job")
     try:
         return _swap(source, new, validated, {l: origin_of[l] for l in new}, {_iso1(l) for l in reviewed} & set(new),
-                     audio_code, job)
+                     audio_code, job, left=left, source_lang=source_lang)
     finally:
         lock.release()
 
 
 def _swap(source: Path, new: Dict[str, List[Cue]], validated: List[str], origins: Dict[str, str],
-          reviewed: Set[str], audio_language: Optional[str], job: Optional[JobHandle]) -> OutputResult:
+          reviewed: Set[str], audio_language: Optional[str], job: Optional[JobHandle], *,
+          left: Mapping[str, Set[int]] = {}, source_lang: Mapping[str, str] = {}) -> OutputResult:
     if not source.is_file():
         raise OutputError(f"the source {source.name} does not exist")
     final = source.with_name(marked_name(source, validated))
@@ -274,6 +283,7 @@ def _swap(source: Path, new: Dict[str, List[Cue]], validated: List[str], origins
     with tempfile.TemporaryDirectory(prefix="substudio-out-") as work:
         srt_paths: List[tuple] = []
         expected: Dict[str, int] = {}
+        extra: Dict[str, Dict[str, str]] = {}
         for lang, cues in new.items():
             kept = drop_after(cues, duration)
             if not kept:
@@ -282,15 +292,21 @@ def _swap(source: Path, new: Dict[str, List[Cue]], validated: List[str], origins
             p.write_text(to_srt(kept), encoding="utf-8")
             srt_paths.append((lang, p))
             expected[lang] = len(kept)
+            extra[lang] = {}
+            if lang in source_lang:
+                extra[lang][FROM_TAG] = source_lang[lang]
+            positions = [n for n, c in enumerate(kept, start=1) if c.id in left.get(lang, ())]
+            if positions:
+                extra[lang][UNTRANSLATED_TAG] = cue_ids_value(positions)
 
         tmp = _new_temp(source)
         try:
             covers = _extract_covers(source, info, Path(work))
-            result = _run(_mux_args(source, info, srt_paths, tmp, covers, origins, reviewed, audio_tag), job)
+            result = _run(_mux_args(source, info, srt_paths, tmp, covers, origins, reviewed, audio_tag, extra), job)
             if result.returncode != 0:
                 raise OutputError(f"ffmpeg could not write the new file: "
                                   f"{result.stderr.decode('utf-8', 'replace').strip()[:300]}")
-            _verify(info, tmp, expected, origins, reviewed, audio_tag)
+            _verify(info, tmp, expected, origins, reviewed, audio_tag, extra)
             # The one moment the library changes.
             try:
                 _place(tmp, final, source)

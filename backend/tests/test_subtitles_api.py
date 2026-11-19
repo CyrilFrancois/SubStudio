@@ -223,3 +223,34 @@ def _app(routes_mod) -> FastAPI:
     app = FastAPI()
     app.include_router(routes_mod.router)
     return app
+
+
+def _video_with_left(folder: Path) -> Path:
+    raw = folder / "Show S01E02.mkv"
+    ffmpeg(*_SRC, "-map", "0:v", "-map", "1:a", *_AV, str(raw))
+    fr = [Cue(10, 500, 2000, "Bonjour."), Cue(11, 2500, 4000, "I am still here."), Cue(12, 4200, 4800, "Fin.")]
+    return update_in_place(raw, {"fr": fr}, ["fr"], origins={"fr": "translated"}, untranslated={"fr": {11}},
+                           from_languages={"fr": "en"}).path
+
+
+def test_a_line_left_untranslated_is_flagged_after_a_restart_too(tmp_path, monkeypatch):
+    p = _video_with_left(tmp_path)
+    got = get_cue_list(_orch(), "v1", str(p), "fr")                  # no run in memory: only the file knows
+    assert got.from_language == "en" and [c.untranslated_from for c in got.cues] == [None, "en", None]
+    monkeypatch.setattr(job_runner, "_orch", _orch())
+    vid = library.remember(str(p))
+    flags = [c["flags"] for c in TestClient(_app(routes)).get(f"/api/subtitles/{vid}/fr").json()["cues"]]
+    assert flags[1] == ["untranslated"] and flags[0] == [] and flags[2] == []
+
+
+def test_fixing_a_line_left_untranslated_in_review_removes_it_from_the_tag(tmp_path):
+    p = _video_with_left(tmp_path)
+    listing = get_cue_list(_orch(), "v1", str(p), "fr")
+    saved = save_cue_list(_orch(), "v1", str(p), "fr", _body(listing, c2="Je suis toujours là."))
+    assert [c.untranslated_from for c in saved.cues] == [None, None, None]
+    assert read_track(p, "fr").untranslated == [] and read_track(p, "fr").from_language == "en"
+    # A save that leaves the line as it was keeps it listed.
+    (tmp_path / "b").mkdir()
+    p2 = _video_with_left(tmp_path / "b")
+    again = save_cue_list(_orch(), "v2", str(p2), "fr", _body(get_cue_list(_orch(), "v2", str(p2), "fr"), c1="Salut."))
+    assert [c.untranslated_from for c in again.cues] == [None, "en", None]

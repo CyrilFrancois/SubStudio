@@ -114,6 +114,15 @@ class VideoRun:
     # record after the output step (core/output.verdict_record), so the Library says kept or rejected.
     judged: Dict[Tuple[str, str], bool] = field(default_factory=dict)
 
+    def source_of(self, lang: str) -> Optional[Source]:
+        """The subtitle a translated cell was made from (the human one of its from_language, or the transcript),
+        while the run still holds it; None for a cell that was not translated."""
+        cell = self.cells.get(lang)
+        origin = cell.origin if cell else None
+        if origin is None or origin.kind() != "translated":
+            return None
+        return self.asr if origin.rung == Rung.ASR else self.human.get(origin.from_language)
+
     def passed(self) -> Dict[str, List[Cue]]:
         return {lang: c.cues for lang, c in self.cells.items() if c.state == CellState.PASSED}
 

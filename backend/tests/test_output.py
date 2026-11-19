@@ -426,3 +426,54 @@ def test_write_run_tags_the_audio_with_what_the_run_detected(tmp_path):
     run = VideoRun(path=str(src), cells={"fr": Cell("fr", CellState.PASSED, Origin(Rung.TRANSLATE, "en"), cues=FR)})
     run.audio_tag = "en"
     assert _audio_tag(write_run(run).path) == "eng"
+
+
+# ---------------------------------------------------------------- lines left in the source language
+
+LEFT = [Cue(10, 500, 2000, "Bonjour à tous."), Cue(11, 2500, 4000, "I am still here."),
+        Cue(12, 4200, 4800, "Fin de la scène."), Cue(13, 9000, 9500, "Past the end, still English.")]
+
+
+def _sub_tags(path: Path, title: str) -> dict:
+    s = [s for s in media._probe(path)["streams"] if s.get("tags", {}).get("title") == title][0]
+    return {k.upper(): v for k, v in s.get("tags", {}).items()}
+
+
+def test_lines_left_untranslated_are_tagged_by_their_position_in_the_file(tmp_path):
+    src = _mkv_with_sdh(tmp_path)
+    # Ids are the source's (10..13); the file numbers its cues 1..n, and cue 13 starts after the 5-s clip ends.
+    result = _upd(src, {"fr": LEFT}, ["en", "fr"], untranslated={"fr": {11, 13}}, from_languages={"fr": "en"})
+    tags = _sub_tags(result.path, "SubStudio fr")
+    assert tags["SUBSTUDIO_UNTRANSLATED"] == "2" and tags["SUBSTUDIO_FROM"] == "en"
+
+
+def test_no_line_left_untranslated_means_no_tag(tmp_path):
+    result = _upd(_mkv_with_sdh(tmp_path), {"fr": FR}, ["en", "fr"], from_languages={"fr": "en"})
+    tags = _sub_tags(result.path, "SubStudio fr")
+    assert "SUBSTUDIO_UNTRANSLATED" not in tags and tags["SUBSTUDIO_FROM"] == "en"
+
+
+def test_write_run_finds_the_lines_left_untranslated_with_the_gates_rule(tmp_path):
+    from core.acquire.types import Rung
+    from core.cells import Cell, CellState, Origin, Source, VideoRun
+    from core.output import write_run
+    from core.subtitles import TranslationContext
+    en = [Cue(10, 500, 2000, "Hello to all of you."), Cue(11, 2500, 4000, "I am still here."),
+          Cue(12, 4200, 4800, "OK.")]
+    fr = [Cue(10, 500, 2000, "Bonjour à vous tous."), Cue(11, 2500, 4000, "I am still here."),
+          Cue(12, 4200, 4800, "OK.")]                       # « OK. » is under 3 words: not counted as left
+    src = _mkv_with_sdh(tmp_path)
+    run = VideoRun(path=str(src), cells={"fr": Cell("fr", CellState.PASSED, Origin(Rung.TRANSLATE, "en"), cues=fr)},
+                   human={"en": Source(cues=en, rung=Rung.DOWNLOAD, language="en", context=TranslationContext())})
+    tags = _sub_tags(write_run(run).path, "SubStudio fr")
+    assert tags["SUBSTUDIO_UNTRANSLATED"] == "2" and tags["SUBSTUDIO_FROM"] == "en"
+
+
+def test_the_check_refuses_a_file_whose_untranslated_tag_was_not_written(tmp_path, monkeypatch):
+    src = _mkv_with_sdh(tmp_path)
+    before = _sha(src)
+    real = inplace._mux_args
+    monkeypatch.setattr(inplace, "_mux_args", lambda *a: real(*a[:8]))      # the mux forgets the extra tags
+    with pytest.raises(OutputError, match="SUBSTUDIO_UNTRANSLATED|SUBSTUDIO_FROM"):
+        _upd(src, {"fr": LEFT}, ["en", "fr"], untranslated={"fr": {11}}, from_languages={"fr": "en"})
+    assert _sha(src) == before and _no_temp(tmp_path)
