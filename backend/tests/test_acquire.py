@@ -31,53 +31,61 @@ class NormalizeLanguage(unittest.TestCase):
             plan(["yue"], [])
 
 
+def _rungs(p):
+    return [s.rung for s in p.steps]
+
+
 class Plan(unittest.TestCase):
-    def test_unmarked_subtitles_are_untrusted_by_default(self):
+    def test_default_ov_en_fr_on_an_english_episode(self):
+        # Cyril's default « OV, English, French » on Ghosts (English audio): OV and EN are one track.
+        plans = plan(["OV", "English", "French"], [], original_language="eng")
+        self.assertEqual([(p.language, p.is_ov, p.source_only) for p in plans], [("en", True, False), ("fr", False, False)])
+        en, fr = plans
+        self.assertEqual(_rungs(en), [Rung.DOWNLOAD, Rung.TRANSLATE, Rung.ASR])
+        self.assertEqual(_rungs(fr), [Rung.DOWNLOAD, Rung.TRANSLATE, Rung.ASR])
+        self.assertEqual(fr.steps[1].from_languages, ("en",))  # OV first
+
+    def test_ov_without_a_detected_language_raises_instead_of_guessing(self):
+        with self.assertRaises(ValueError):
+            plan(["OV", "fr"], [])
+
+    def test_ov_feeds_translation_even_when_not_asked(self):
+        plans = plan(["fr"], [], original_language="ja")
+        self.assertEqual([(p.language, p.source_only) for p in plans], [("ja", True), ("fr", False)])
+        self.assertEqual(_rungs(plans[0]), [Rung.DOWNLOAD])  # never translated or transcribed for itself
+        self.assertEqual(plans[1].steps[1].from_languages, ("ja",))
+
+    def test_unmarked_subtitles_are_not_considered_by_default(self):
         # The C:\Videos case: an older SubStudio's bad tracks and sidecars look like a release's own.
-        old = [ExistingSub("fr", "embedded", "2"), ExistingSub("en", "embedded", "3"),
-               ExistingSub("fr", "sidecar", "/x.fr.srt"), ExistingSub("en", "sidecar", "/x.en.srt")]
-        (p,) = plan(["fr"], old, original_language="en")
-        self.assertEqual([s.rung for s in p.steps], [Rung.DOWNLOAD, Rung.TRANSLATE, Rung.ASR])
-        self.assertIsNone(p.steps[1].source)  # nor fed to translation
+        old = [ExistingSub("fr", "embedded", "2"), ExistingSub("de", "embedded", "3"),
+               ExistingSub("fr", "sidecar", "/x.fr.srt")]
+        plans = plan(["fr"], old, original_language="en")
+        self.assertEqual([p.language for p in plans], ["en", "fr"])  # no German source-only plan
+        self.assertEqual(_rungs(plans[1]), [Rung.DOWNLOAD, Rung.TRANSLATE, Rung.ASR])
         for kind in ("embedded", "sidecar"):
             (p,) = plan(["fr"], [ExistingSub("fr", kind, "2", marked=True)])
             self.assertEqual(p.rung, Rung.EXISTING, kind)
 
-    def test_existing_track_ends_the_ladder(self):
+    def test_existing_is_evaluated_then_falls_through(self):
+        # Rung 1 ends at the gate: a subtitle that fails it must leave the rest of the ladder in place.
         (p,) = plan(["fr"], [ExistingSub("fr", "embedded", "2")], count_existing=True)
-        self.assertEqual([s.rung for s in p.steps], [Rung.EXISTING])
+        self.assertEqual(_rungs(p), [Rung.EXISTING, Rung.DOWNLOAD, Rung.ASR])
 
-    def test_bitmap_track_counts_as_existing_but_text_is_preferred(self):
+    def test_text_existing_before_bitmap(self):
         (p,) = plan(["fr"], [ExistingSub("fr", "embedded", "3", text=False), ExistingSub("fr", "sidecar", "/x.fr.srt")],
                     count_existing=True)
-        self.assertEqual(p.steps[0].source.kind, "sidecar")
-        (p,) = plan(["fr"], [ExistingSub("fr", "embedded", "3", text=False)], count_existing=True)
-        self.assertEqual(p.rung, Rung.EXISTING)
+        self.assertEqual([s.source.kind for s in p.steps[:2]], ["sidecar", "embedded"])
 
-    def test_missing_language_downloads_then_translates_then_asr(self):
-        en = ExistingSub("en", "embedded", "2")
-        (p,) = plan(["fr"], [en], original_language="en", count_existing=True)
-        self.assertEqual([s.rung for s in p.steps], [Rung.DOWNLOAD, Rung.TRANSLATE, Rung.ASR])
-        self.assertEqual(p.steps[1].source, en)
-
-    def test_translation_source_prefers_original_language(self):
-        de, ja = ExistingSub("de", "embedded", "2"), ExistingSub("ja", "embedded", "3")
-        (p,) = plan(["fr"], [de, ja], original_language="jpn", count_existing=True)
-        self.assertEqual(p.steps[1].source, ja)
-
-    def test_bitmap_is_never_a_translation_source(self):
-        (p,) = plan(["fr"], [ExistingSub("en", "embedded", "2", text=False)], original_language="en",
-                    count_existing=True)
-        self.assertIsNone(p.steps[1].source)
-        self.assertEqual(p.steps[1].download_language, "en")
+    def test_other_language_text_track_becomes_a_source_only_plan(self):
+        plans = plan(["fr"], [ExistingSub("de", "embedded", "2"), ExistingSub("it", "embedded", "4", text=False)],
+                     original_language="ja", count_existing=True)
+        self.assertEqual([(p.language, p.source_only) for p in plans], [("ja", True), ("fr", False), ("de", True)])
+        self.assertEqual(plans[1].steps[1].from_languages, ("ja", "de"))  # OV first; bitmap Italian never a source
+        self.assertEqual(_rungs(plans[2]), [Rung.EXISTING])
 
     def test_no_downloads_means_no_download_rungs(self):
         (p,) = plan(["fr"], [], downloads_enabled=False)
-        self.assertEqual([s.rung for s in p.steps], [Rung.ASR])
-
-    def test_wanted_equals_original_skips_self_translation(self):
-        (p,) = plan(["en"], [], original_language="en")
-        self.assertEqual([s.rung for s in p.steps], [Rung.DOWNLOAD, Rung.ASR])
+        self.assertEqual(_rungs(p), [Rung.ASR])
 
     def test_duplicates_collapse_and_unknown_raises(self):
         self.assertEqual(len(plan(["fr", "fre", "fra"], [])), 1)
