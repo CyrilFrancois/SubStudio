@@ -191,6 +191,8 @@ class PipelineOrchestrator:
         result = await asyncio.to_thread(write_run, run, job)
         if result is not None:
             logger.info(f"{p} {result.status}: {result.path.name}")
+        # The write is finished: the stepper shows it done even if a language failed earlier (the job then fails).
+        event_manager.emit(run.path, "processing", 100, f"{p} Step 5/5: written")
         await asyncio.to_thread(self._record_verdicts, run, result)
 
     @staticmethod
