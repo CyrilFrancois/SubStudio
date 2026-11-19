@@ -1,6 +1,7 @@
 # main.py — FastAPI app + PipelineOrchestrator: scan, process, SSE events. Exports: app.
 
 import logging
+import os
 import time
 import asyncio
 import re
@@ -20,6 +21,9 @@ from core.translator import SubtitleTranslator
 from core.muxer import VideoMuxer
 from core.events import event_manager, setup_logging_bridge
 from core.jobs import job_registry, JobAborted
+
+# /data inside Docker; set SUBSTUDIO_MEDIA_ROOT (e.g. C:/Videos) when the backend runs natively.
+MEDIA_ROOT = os.getenv("SUBSTUDIO_MEDIA_ROOT", "/data")
 
 # --- LOGGING CONFIGURATION ---
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
@@ -57,7 +61,7 @@ class ProcessRequest(BaseModel):
 
 class PipelineOrchestrator:
     def __init__(self):
-        self.scanner = VideoScanner(base_path="/data")
+        self.scanner = VideoScanner(base_path=MEDIA_ROOT)
         self.processor = SubtitleProcessor()
         self.transcriber = VideoTranscriber(model_size="medium")
         self.translator = SubtitleTranslator()
@@ -264,7 +268,7 @@ app.add_middleware(
 )
 
 @app.get("/api/scan")
-async def scan(target_path: str = Query("/data")):
+async def scan(target_path: str = Query(MEDIA_ROOT)):
     # scanner.scan() shells out to ffprobe per file; keep it off the event loop.
     files = await asyncio.to_thread(orchestrator.get_files, target_path)
     return {"files": files}

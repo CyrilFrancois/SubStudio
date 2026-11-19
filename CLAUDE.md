@@ -41,14 +41,27 @@ correct fix that makes the workflow worse is still wrong.
 
 ## Phase and what it forbids
 - **Phase:** build, active since 2026-11-18 (paused 2026-08-21 to 2026-11-18). Local only: no hosted deployment.
-- **Forbidden:** testing with `cleanUp=true` on real media (it deletes the source); touching Cyril's library
-  beyond the exact files a test created. Commit and push are Claude's (`.claude/rules/git-and-secrets.md` §9).
+- **Test corpus (Cyril, 2026-11-19): `C:\Videos` is the media test folder.** Today: `C:\Videos\Ghosts\Saison 5\`,
+  22 MKV episodes of Ghosts (2021) S05E01–E22, 14 GB, 720p/1080p, H.264/HEVC, English audio. Every video there is
+  to be subtitled, and **is treated as having no subtitles**: 15 carry tracks made by an older SubStudio, which are
+  not good and carry no marker telling them from release tracks.
+- **Every pre-existing subtitle is untrusted by default,** embedded tracks AND sidecars (the old SubStudio wrote
+  `{stem}.{lang}.srt` by default). The setting `count_existing` (« Count subtitles not made by this SubStudio ») is
+  OFF by default: such a subtitle then never counts as coverage, never makes the planner skip a language, and is
+  never used as a scoring reference; the UI shows the language as missing with « ignored: <lang> <embedded|sidecar> ».
+  What the new SubStudio writes is recognised by ONE rule, `backend/core/provenance.py` (muxed track title
+  « SubStudio {lang} », sidecars listed in the per-video manifest), and does count.
+- **Forbidden:** `cleanUp=true`, or deleting or overwriting any source video, anywhere (in `C:\Videos` too: 14 GB to
+  re-fetch); touching anything outside `C:\Videos` beyond the exact files a test created; outputs only as new files
+  next to the source, removed by exact name when a test made them. Commit and push are Claude's
+  (`.claude/rules/git-and-secrets.md` §9).
 
 ## Sources of record
 | Source | URL or path | Access | Notes |
 |---|---|---|---|
 | Code | https://github.com/CyrilFrancois/SubStudio (public), local `SubStudio/` | Cyril's GitHub account | `origin/main` is production; renamed from videosToSubtitledvideos on 2026-11-18 |
 | App | http://localhost:3000 (UI), http://localhost:8000/health (API) | `docker compose up --build` | no database; state in memory |
+| Test corpus | `C:\Videos` (mounted as `/data` in Docker; `SUBSTUDIO_MEDIA_ROOT` natively) | local | Cyril's test videos; rules in « Phase and what it forbids » |
 | Gemini key | https://aistudio.google.com/apikey | Cyril's Google account | value lives in `SubStudio/.env` only |
 | Backlog | workspace `TODOLIST.MD`, `### [SubStudio]` below the marker | Claude keeps it; Cyril's notes go above the marker | ordered by the architecture review |
 | Pre-harness files | `_archive/2026-11-18_*-before-harness.md` (gitignored) | local | byte-exact copies |
