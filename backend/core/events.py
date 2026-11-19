@@ -126,6 +126,6 @@ event_manager = EventManager()
 
 def setup_logging_bridge(file_id: str) -> SSELogHandler:
     handler = SSELogHandler(event_manager, file_id)
-    handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
+    handler.setFormatter(logging.Formatter('%(message)s'))  # the level travels as its own field
     logging.getLogger().addHandler(handler)
     return handler

@@ -1,4 +1,4 @@
-# inplace.py — The verified swap: put new subtitle tracks INTO the source video and rename it with a (Sub-EN,FR) marker, never losing the source. Exports: update_in_place, marked_name, OutputResult, OutputError.
+# inplace.py — The verified swap: put new subtitle tracks INTO the source video and rename it with a (Sub-EN,FR) marker, never losing the source. Exports: update_in_place, subtitle_streams, marked_name, OutputResult, OutputError.
 """
 Cyril's rule (doc/user-process.md §4, D-0002; CLAUDE.md « Forbidden »): a source video is replaced only by this swap.
 
@@ -56,6 +56,9 @@ class OutputResult:
     path: Path                      # where the video is now (the source path when untouched)
     added: List[str] = field(default_factory=list)   # ISO 639-1 of the tracks written
     marker: Optional[str] = None    # « (Sub-EN,FR) » when the file was updated
+    # Where each subtitle of the source is now: its position among the source's subtitle streams (the ladder's
+    # `-map 0:s:N` ref) → its stream index in the file at `path`. A track the update replaced is absent.
+    subs: Dict[int, int] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------- names
@@ -103,6 +106,21 @@ def _probe(path: Path) -> dict:
     if result.returncode != 0:
         raise OutputError(f"ffprobe could not read {path.name}: {result.stderr.decode('utf-8', 'replace').strip()[:300]}")
     return json.loads(result.stdout.decode("utf-8", "replace"))
+
+
+def subtitle_streams(path: Path) -> Dict[int, int]:
+    """{position among subtitle streams: stream index} of a video as it is (an untouched one maps to itself)."""
+    subs = [s["index"] for s in _probe(Path(path)).get("streams", []) if s.get("codec_type") == "subtitle"]
+    return dict(enumerate(subs))
+
+
+def _moved_subs(source_info: dict, kept: List[dict], final: Path) -> Dict[int, int]:
+    # The mux maps the kept subtitles in source order before the new ones: the k-th subtitle of the new file is
+    # kept[k] (_mux_args). Read from the placed file, never assumed.
+    position = {s["index"]: i for i, s in
+                enumerate(s for s in source_info.get("streams", []) if s.get("codec_type") == "subtitle")}
+    now = subtitle_streams(final)
+    return {position[s["index"]]: now[k] for k, s in enumerate(kept) if k in now}
 
 
 def _is_cover(stream: dict) -> bool:
@@ -413,4 +431,11 @@ def _swap(source: Path, new: Dict[str, List[Cue]], validated: List[str], origins
             raise OutputError(f"the new file {final.name} is in place, but the old {source.name} could not be "
                               f"removed ({e}); delete it by hand") from e
     logger.info("Updated %s → %s (+%s)", source.name, final.name, ",".join(new))
-    return OutputResult(status="updated", path=final, added=list(new), marker=marker(validated))
+    try:
+        subs = _moved_subs(info, _kept_subs(info, set(new)), final)
+    except OutputError as e:
+        # The update is done and verified; without the map, the kept tracks just read « not checked yet ».
+        logger.error("Updated %s, but could not re-read its subtitle streams (%s): their verdicts are not recorded",
+                     final.name, e)
+        subs = {}
+    return OutputResult(status="updated", path=final, added=list(new), marker=marker(validated), subs=subs)

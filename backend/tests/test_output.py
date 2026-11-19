@@ -357,3 +357,31 @@ def test_missing_or_invalid_origin_is_refused(tmp_path, origins):
 def test_marker_matches_what_the_library_parses():
     from core.provenance import parse_name_marker
     assert parse_name_marker(Path(marked_name(Path("Ep (Sub-EN).mp4"), ["en", "fr"])).stem) == ["en", "fr"]
+
+
+def test_update_says_where_each_kept_subtitle_is_now(tmp_path):
+    # The SDH track is subtitle 0 of the source; on a rerun our old fr is replaced and gets no entry.
+    first = _upd(_mkv_with_sdh(tmp_path), {"fr": FR}, ["en", "fr"])
+    sdh = next(s["index"] for s in probe(first.path)["streams"] if s.get("tags", {}).get("title") == "English (SDH)")
+    assert first.subs == {0: sdh}
+    again = _upd(first.path, {"fr": FR[:2]}, ["en", "fr"])
+    assert again.subs == {0: sdh}
+    assert inplace.subtitle_streams(again.path) == {0: sdh, 1: sdh + 1}
+
+
+def test_verdict_record_keys_the_file_as_it_is_now(tmp_path):
+    from core.cells import VideoRun
+    from core.output import verdict_record
+    from core.provenance import REJECTED, track_key
+    side = tmp_path / "Ep.en.srt"
+    run = VideoRun(path=str(tmp_path / "Ep.mkv"), cells={})
+    run.judged = {("embedded", "0"): True, ("embedded", "1"): False, ("embedded", "2"): True,
+                  ("sidecar", str(side)): False}
+    rec = verdict_record(run, {0: 3, 1: 5})                  # subtitle 2 was replaced by the update
+    assert rec == {"stream:3": "kept", "stream:5": REJECTED, track_key(kind="sidecar", path=str(side)): REJECTED}
+
+
+def test_library_and_pipeline_share_the_rejected_value():
+    from api import library
+    from core import provenance
+    assert library.REJECTED is provenance.REJECTED

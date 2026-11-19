@@ -14,7 +14,7 @@ from typing import Dict, List, Optional, Tuple
 
 import langcodes
 
-from core.provenance import ORIGIN_TAG, ORIGINS, OV, is_substudio_track, parse_name_marker, track_key
+from core.provenance import ORIGIN_TAG, ORIGINS, OV, REJECTED, is_substudio_track, parse_name_marker, track_key
 
 from .config import MEDIA_ROOT
 from .schemas import LanguageCoverage, LibraryResponse, LibraryVideo, Settings, SubtitleTrack
@@ -207,8 +207,7 @@ def _verdicts(path: str, st: os.stat_result) -> Dict[str, str]:
     return job_store().verdicts(path, st)
 
 
-# Verdict-record value for a subtitle the quality gate refused (an accepted one carries its origin instead).
-REJECTED = "rejected"
+# REJECTED (the verdict-record value of a refused subtitle) comes from core/provenance: the pipeline writes it.
 NOT_CHECKED = "not checked yet: the quality check runs when the video is started"
 REJECTED_REASON = "the quality check rejected it"
 

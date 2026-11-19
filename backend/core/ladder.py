@@ -122,6 +122,7 @@ class Ladder:
         if not cues:
             return None, f"{sub.language} {sub.kind} has no lines"
         why = await self._verdict(cues, sub.language, label=sub.language)
+        self.run.judged[(sub.kind, sub.ref)] = why is None
         return (None, f"{sub.language} {sub.kind} rejected: {why}") if why else (cues, "")
 
     async def _download(self, langs: List[str]) -> None:

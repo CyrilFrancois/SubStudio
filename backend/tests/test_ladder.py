@@ -262,6 +262,7 @@ def test_unmarked_existing_counts_when_the_gate_passes_it():
     run, ladder, asr, fetches, reads = gated(["en"], [sdh], original="en")
     cells = go(run, ladder)
     assert cells["en"]["origin"] == "kept" and fetches == [] and ladder.deps.gate.calls[0][:2] == ("en", "en")
+    assert run.judged == {("embedded", "0"): True}       # recorded « kept » after the output step
 
 
 def test_rejected_existing_falls_through_with_the_gate_sentence(monkeypatch):
@@ -279,6 +280,7 @@ def test_rejected_existing_falls_through_with_the_gate_sentence(monkeypatch):
     cells = go(run, ladder)
     assert cells["en"]["attempts"] == ["existing: en embedded rejected: en: 41 % of lines overlap speech (min 85 %)"]
     assert cells["en"]["origin"] == "downloaded" and fetches == [["en"]]
+    assert run.judged == {("embedded", "0"): False}      # recorded « rejected »: the Library says why
 
 
 def test_count_existing_off_never_checks_an_unmarked_subtitle():
@@ -287,6 +289,7 @@ def test_count_existing_off_never_checks_an_unmarked_subtitle():
     go(run, ladder)
     assert run.cells["en"].attempts[0] == "existing: ignored: en embedded"
     assert ("en", "en", False, 9000) not in ladder.deps.gate.calls  # the track itself was never gated
+    assert run.judged == {}                               # never judged: stays « not checked yet »
 
 
 def test_rejected_download_is_noted_and_not_used(monkeypatch):
