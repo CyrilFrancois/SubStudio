@@ -21,7 +21,6 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from core.acquire.types import Rung
 from core.cells import CellState, VideoRun
 from core.jobs import job_registry
 from core.output import OutputBusy, OutputError, current_path, read_track, update_in_place
@@ -116,12 +115,10 @@ def _matched(run: Optional[VideoRun], lang: str, cues: List[Cue]) -> List[Option
 
 def _translated_from(run: Optional[VideoRun], lang: str) -> Tuple[Optional[str], Dict[int, str]]:
     """(source language, {source cue id: text}) of a translated cell the run still holds, else (None, {})."""
-    cell = run.cells.get(lang) if run else None
-    origin = cell.origin if cell else None
-    if origin is None or origin.kind() != "translated":
+    source = run.source_of(lang) if run else None
+    if source is None:
         return None, {}
-    source = run.asr if origin.rung == Rung.ASR else run.human.get(origin.from_language)
-    return origin.from_language, ({c.id: c.text for c in source.cues} if source else {})
+    return run.cells[lang].origin.from_language, {c.id: c.text for c in source.cues}
 
 
 def get_cue_list(orch, video_id: str, path: str, lang: str) -> CueList:
@@ -130,8 +127,11 @@ def get_cue_list(orch, video_id: str, path: str, lang: str) -> CueList:
     track = _read(path, code)
     run = _run_for(orch, path)
     from_language, sources = _translated_from(run, code)
+    from_language = from_language or track.from_language      # the file's tag survives a restart; memory may not
+    left = set(track.untranslated)
     cues = [ApiCue(id=c.id, start_ms=c.start_ms, end_ms=c.end_ms, text=c.text,
-                   source_text=sources.get(m.id) if m else None)
+                   source_text=sources.get(m.id) if m else None,
+                   untranslated_from=(from_language or "und") if c.id in left else None)
             for c, m in zip(track.cues, _matched(run, code, track.cues))]
     return CueList(video_id=video_id, language=lang, origin=track.origin if track.origin in ORIGINS else "existing",
                    from_language=from_language, reviewed=track.reviewed, cues=cues)
@@ -174,8 +174,12 @@ def save_cue_list(orch, video_id: str, path: str, lang: str, body: CueList) -> C
     validated = parse_name_marker(Path(path).stem) or []
     if code not in validated:
         validated.append(code)
+    # A line left in the source language stops being listed once its text was changed; one saved as is stays listed.
+    still_left = {i for i in track.untranslated if texts[i] == track.cues[i - 1].text}
     try:
-        result = update_in_place(Path(path), {code: new}, validated, origins={code: track.origin}, reviewed={code})
+        result = update_in_place(Path(path), {code: new}, validated, origins={code: track.origin}, reviewed={code},
+                                 untranslated={code: still_left},
+                                 from_languages={code: track.from_language} if track.from_language else {})
     except OutputBusy as e:
         raise SubtitleError(409, f"Not saved, the video is unchanged: {e}.")
     except OutputError as e:
@@ -188,12 +192,16 @@ def save_cue_list(orch, video_id: str, path: str, lang: str, body: CueList) -> C
         if cell is not None and cell.state == CellState.PASSED and cell.cues:
             cell.reviewed = True
             if all(m is not None for m in matched):
-                # Same cues, new text: keeps the source ids, so source_text still resolves.
+                # Same cues, new text: keeps the source ids, so source_text still resolves. A refused line whose
+                # text was changed is no longer left in the source language, so a rebuild must not list it again.
+                edited = {m.id for c, m in zip(track.cues, matched) if texts[c.id] != c.text}
+                cell.left_in_source = [i for i in cell.left_in_source if i not in edited]
                 cell.cues = [replace(m, text=texts[c.id]) for c, m in zip(track.cues, matched)] + cell.cues[len(matched):]
             else:
                 logger.warning("%s %s: the kept run no longer matches the file cue by cue; it now holds the file's "
                                "cues (source text lost for this cell)", Path(path).name, code)
                 cell.cues = new
+                cell.left_in_source = sorted(still_left)     # now in the file's numbering, like cell.cues
         run.output_path = str(result.path)
 
     new_path = str(result.path)

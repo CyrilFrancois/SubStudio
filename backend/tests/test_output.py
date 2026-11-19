@@ -150,8 +150,8 @@ def test_failed_verify_leaves_source_byte_identical(tmp_path, monkeypatch):
     before = _sha(src)
     real = inplace._mux_args
 
-    def truncated(*args):   # a mux that silently loses the last 3 s: only the verify step can catch it
-        cmd = real(*args)
+    def truncated(*args, **kw):   # a mux that silently loses the last 3 s: only the verify step can catch it
+        cmd = real(*args, **kw)
         return cmd[:-3] + ["-t", "2"] + cmd[-3:]
 
     monkeypatch.setattr(inplace, "_mux_args", truncated)
@@ -165,8 +165,8 @@ def test_failed_verify_on_lost_audio(tmp_path, monkeypatch):
     before = _sha(src)
     real = inplace._mux_args
 
-    def no_audio(*args):
-        cmd = real(*args)
+    def no_audio(*args, **kw):
+        cmd = real(*args, **kw)
         i = cmd.index("0:1")       # the audio stream's map
         return cmd[:i - 1] + cmd[i + 1:]
 
@@ -180,7 +180,7 @@ def test_ffmpeg_failure_leaves_source_byte_identical(tmp_path, monkeypatch):
     src = _mkv_with_sdh(tmp_path)
     before = _sha(src)
     real = inplace._mux_args
-    monkeypatch.setattr(inplace, "_mux_args", lambda *a: real(*a)[:-1] + ["-bogus-option", str(a[-1])])
+    monkeypatch.setattr(inplace, "_mux_args", lambda *a, **k: real(*a, **k)[:-1] + ["-bogus-option", str(a[3])])
     with pytest.raises(OutputError, match="ffmpeg"):
         _upd(src, {"fr": FR}, ["en", "fr"])
     _assert_source_intact(src, before)
@@ -261,15 +261,16 @@ def test_chapters_survive(tmp_path):
 def test_lost_existing_subtitle_fails_verify(tmp_path, monkeypatch):
     src = _mkv_with_sdh(tmp_path)
     before = _sha(src)
-    monkeypatch.setattr(inplace, "_kept_subs", lambda info, langs: [])   # the mux forgets the SDH track…
+    real_plan = inplace._sub_plan       # the mux forgets the SDH track…
+    monkeypatch.setattr(inplace, "_sub_plan", lambda info, langs: [x for x in real_plan(info, langs) if isinstance(x, str)])
     real_verify = inplace._verify
 
-    def verify_against_truth(*args):  # …but the check knows it was there
+    def verify_against_truth(*args, **kw):  # …but the check knows it was there
         monkeypatch.undo()
-        real_verify(*args)
+        real_verify(*args, **kw)
 
     monkeypatch.setattr(inplace, "_verify", verify_against_truth)
-    with pytest.raises(OutputError, match="subtitle tracks were not all kept"):
+    with pytest.raises(OutputError, match="subtitle tracks are not the ones planned"):
         _upd(src, {"fr": FR}, ["en", "fr"])
     _assert_source_intact(src, before)
 
@@ -291,8 +292,8 @@ def test_target_appearing_during_the_update_is_never_overwritten(tmp_path, monke
     other = tmp_path / "Ghosts S05E01 (Sub-EN,FR).mkv"
     real_verify = inplace._verify
 
-    def verify_then_race(*args):
-        real_verify(*args)
+    def verify_then_race(*args, **kw):
+        real_verify(*args, **kw)
         other.write_bytes(b"arrived meanwhile")
 
     monkeypatch.setattr(inplace, "_verify", verify_then_race)
@@ -306,7 +307,7 @@ def test_interrupt_or_cancel_leaves_source_byte_identical(tmp_path, monkeypatch,
     src = _mkv_with_sdh(tmp_path)
     before = _sha(src)
 
-    def boom(*args):
+    def boom(*args, **kw):
         raise exc()
 
     monkeypatch.setattr(inplace, "_verify", boom)
@@ -426,3 +427,70 @@ def test_write_run_tags_the_audio_with_what_the_run_detected(tmp_path):
     run = VideoRun(path=str(src), cells={"fr": Cell("fr", CellState.PASSED, Origin(Rung.TRANSLATE, "en"), cues=FR)})
     run.audio_tag = "en"
     assert _audio_tag(write_run(run).path) == "eng"
+
+
+# ---------------------------------------------------------------- lines left in the source language
+
+LEFT = [Cue(10, 500, 2000, "Bonjour à tous."), Cue(11, 2500, 4000, "I am still here."),
+        Cue(12, 4200, 4800, "Fin de la scène."), Cue(13, 9000, 9500, "Past the end, still English.")]
+
+
+def _sub_tags(path: Path, title: str) -> dict:
+    s = [s for s in media._probe(path)["streams"] if s.get("tags", {}).get("title") == title][0]
+    return {k.upper(): v for k, v in s.get("tags", {}).items()}
+
+
+def test_lines_left_untranslated_are_tagged_by_their_position_in_the_file(tmp_path):
+    src = _mkv_with_sdh(tmp_path)
+    # Ids are the source's (10..13); the file numbers its cues 1..n, and cue 13 starts after the 5-s clip ends.
+    result = _upd(src, {"fr": LEFT}, ["en", "fr"], untranslated={"fr": {11, 13}}, from_languages={"fr": "en"})
+    tags = _sub_tags(result.path, "SubStudio fr")
+    assert tags["SUBSTUDIO_UNTRANSLATED"] == "2" and tags["SUBSTUDIO_FROM"] == "en"
+
+
+def test_no_line_left_untranslated_means_no_tag(tmp_path):
+    result = _upd(_mkv_with_sdh(tmp_path), {"fr": FR}, ["en", "fr"], from_languages={"fr": "en"})
+    tags = _sub_tags(result.path, "SubStudio fr")
+    assert "SUBSTUDIO_UNTRANSLATED" not in tags and tags["SUBSTUDIO_FROM"] == "en"
+
+
+def test_write_run_finds_the_lines_left_untranslated_with_the_gates_rule(tmp_path):
+    from core.acquire.types import Rung
+    from core.cells import Cell, CellState, Origin, Source, VideoRun
+    from core.output import write_run
+    from core.subtitles import TranslationContext
+    en = [Cue(10, 500, 2000, "Hello to all of you."), Cue(11, 2500, 4000, "I am still here."),
+          Cue(12, 4200, 4800, "OK.")]
+    fr = [Cue(10, 500, 2000, "Bonjour à vous tous."), Cue(11, 2500, 4000, "I am still here."),
+          Cue(12, 4200, 4800, "OK.")]                       # « OK. » is under 3 words: not counted as left
+    src = _mkv_with_sdh(tmp_path)
+    run = VideoRun(path=str(src), cells={"fr": Cell("fr", CellState.PASSED, Origin(Rung.TRANSLATE, "en"), cues=fr)},
+                   human={"en": Source(cues=en, rung=Rung.DOWNLOAD, language="en", context=TranslationContext())})
+    tags = _sub_tags(write_run(run).path, "SubStudio fr")
+    assert tags["SUBSTUDIO_UNTRANSLATED"] == "2" and tags["SUBSTUDIO_FROM"] == "en"
+
+
+def test_the_check_refuses_a_file_whose_untranslated_tag_was_not_written(tmp_path, monkeypatch):
+    src = _mkv_with_sdh(tmp_path)
+    before = _sha(src)
+    real = inplace._mux_args
+    monkeypatch.setattr(inplace, "_mux_args", lambda *a, **k: real(*a[:8], **k))   # the mux forgets the extra tags
+    with pytest.raises(OutputError, match="SUBSTUDIO_UNTRANSLATED|SUBSTUDIO_FROM"):
+        _upd(src, {"fr": LEFT}, ["en", "fr"], untranslated={"fr": {11}}, from_languages={"fr": "en"})
+    assert _sha(src) == before and _no_temp(tmp_path)
+
+
+def test_a_short_line_the_translator_refused_is_listed_too(tmp_path):
+    # core/cells.produce_cell names the cues the model kept refusing (Cell.left_in_source); a short one is under the
+    # gate's 3-word rule, but it is still English in a French track.
+    from core.acquire.types import Rung
+    from core.cells import Cell, CellState, Origin, Source, VideoRun
+    from core.output import write_run
+    from core.subtitles import TranslationContext
+    en = [Cue(10, 500, 2000, "Hello to all of you."), Cue(11, 2500, 4000, "Run!")]
+    fr = [Cue(10, 500, 2000, "Bonjour à vous tous."), Cue(11, 2500, 4000, "Run!")]
+    cell = Cell("fr", CellState.PASSED, Origin(Rung.TRANSLATE, "en"), cues=fr)
+    cell.left_in_source = [11]
+    run = VideoRun(path=str(_mkv_with_sdh(tmp_path)), cells={"fr": cell},
+                   human={"en": Source(cues=en, rung=Rung.DOWNLOAD, language="en", context=TranslationContext())})
+    assert _sub_tags(write_run(run).path, "SubStudio fr")["SUBSTUDIO_UNTRANSLATED"] == "2"

@@ -171,3 +171,17 @@ def test_an_unreadable_subs_folder_is_a_warning_not_a_failure(root, monkeypatch)
     lib = library.scan_library(Settings(languages=["en"]))
     assert [v.name for v in lib.videos] == ["ep.mkv"]
     assert any("Cannot read folder" in w and "Subs" in w for w in lib.warnings)
+
+
+def test_a_translated_track_says_how_many_lines_were_left_and_in_which_language(root):
+    _mkv(root / "Film (Sub-FR).mkv", audio_lang="eng",
+         subs=[("fre", "SubStudio fr", "translated", {"SUBSTUDIO_UNTRANSLATED": "2,7", "SUBSTUDIO_FROM": "en"})])
+    c = _scan(["fr"])["Film (Sub-FR).mkv"].coverage[0]
+    assert (c.state, c.untranslated, c.from_language) == ("passed", 2, "en")
+
+
+def test_a_malformed_untranslated_tag_counts_nothing_rather_than_failing(root):
+    _mkv(root / "Film (Sub-FR).mkv", audio_lang="eng",
+         subs=[("fre", "SubStudio fr", "translated", {"SUBSTUDIO_UNTRANSLATED": "two, x"})])
+    c = _scan(["fr"])["Film (Sub-FR).mkv"].coverage[0]
+    assert (c.state, c.untranslated) == ("passed", 0)

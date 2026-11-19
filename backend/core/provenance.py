@@ -1,4 +1,4 @@
-# provenance.py — The one rule for « made and validated by the current SubStudio »: track title, origin and reviewed tags, file-name marker. Exports: TRACK_TITLE_PREFIX, ORIGIN_TAG, ORIGINS, REJECTED, REVIEWED_TAG, REVIEWED_YES, OV, substudio_track_title, track_key, is_substudio_track, name_marker, parse_name_marker, strip_name_marker.
+# provenance.py — The one rule for « made and validated by the current SubStudio »: track title, origin and reviewed tags, file-name marker. Exports: TRACK_TITLE_PREFIX, ORIGIN_TAG, ORIGINS, REJECTED, REVIEWED_TAG, REVIEWED_YES, FROM_TAG, UNTRANSLATED_TAG, cue_ids_value, parse_cue_ids, OV, substudio_track_title, track_key, is_substudio_track, name_marker, parse_name_marker, strip_name_marker.
 #
 # Read by the Library (coverage), the planner (what is missing) and the muxer (what title to write),
 # so the three can never disagree. Anything this rule does not recognise is « existing »: by default
@@ -24,6 +24,23 @@ REJECTED = "rejected"
 # copied when another language is rewritten, gone when this language is made again (a new, unreviewed track).
 REVIEWED_TAG = "SUBSTUDIO_REVIEWED"
 REVIEWED_YES = "yes"
+# Stream tags on a translated SubStudio track: the language it was translated from, and the cues (positions 1..n in
+# the track) still in that language, as core/gate/text.untranslated finds them (the translator lets up to 10 % through).
+# They live in the file, so the Library and Review know them after a restart. No line left = no UNTRANSLATED tag.
+FROM_TAG = "SUBSTUDIO_FROM"
+UNTRANSLATED_TAG = "SUBSTUDIO_UNTRANSLATED"
+
+
+def cue_ids_value(ids: Collection[int]) -> str:
+    """{7, 2} -> '2,7': the UNTRANSLATED_TAG value."""
+    return ",".join(str(i) for i in sorted(set(ids)))
+
+
+def parse_cue_ids(value: Optional[str]) -> List[int]:
+    """'2,7' -> [2, 7]. A tag that is not a list of positive numbers reads as none: a malformed tag must never fail a
+    scan or invent a line."""
+    parts = [p.strip() for p in (value or "").split(",") if p.strip()]
+    return sorted({int(p) for p in parts}) if parts and all(p.isdigit() and int(p) > 0 for p in parts) else []
 
 # « Original version »: the language of the audio, a wanted-language entry like "fr" but resolved per video.
 OV = "ov"

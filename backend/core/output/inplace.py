@@ -27,12 +27,11 @@ from babelfish import Language
 
 from ..acquire.plan import normalize_language
 from ..jobs import JobHandle
-from ..provenance import (ORIGIN_TAG, ORIGINS, REVIEWED_TAG, REVIEWED_YES, name_marker, strip_name_marker,
-                          substudio_track_title)
+from ..provenance import (FROM_TAG, ORIGIN_TAG, ORIGINS, REVIEWED_TAG, REVIEWED_YES, UNTRANSLATED_TAG, cue_ids_value,
+                          name_marker, strip_name_marker, substudio_track_title)
 from ..subtitles import Cue, drop_after, to_srt
-from .media import (_TEXT_TO_SRT, OutputBusy, OutputError, _disposition, _duration, _is_cover, _kept_subs, _probe,
-                    _untagged_audio,
-                    _run, subtitle_streams)
+from .media import (_TEXT_TO_SRT, OutputBusy, OutputError, _disposition, _duration, _is_cover, _probe,
+                    _run, _sub_plan, _untagged_audio, subtitle_streams)
 from .verify import _verify
 
 logger = logging.getLogger("SubStudio.Output")
@@ -80,13 +79,14 @@ def marked_name(source: Path, languages: Sequence[str]) -> str:
 # ---------------------------------------------------------------- ffmpeg
 
 
-def _moved_subs(source_info: dict, kept: List[dict], final: Path) -> Dict[int, int]:
-    # The mux maps the kept subtitles in source order before the new ones: the k-th subtitle of the new file is
-    # kept[k] (_mux_args). Read from the placed file, never assumed.
+def _moved_subs(source_info: dict, new_langs: List[str], final: Path) -> Dict[int, int]:
+    # The mux writes the subtitles in the order of _sub_plan: the k-th subtitle of the new file is plan[k]. The
+    # stream indexes are read from the placed file, never assumed.
     position = {s["index"]: i for i, s in
                 enumerate(s for s in source_info.get("streams", []) if s.get("codec_type") == "subtitle")}
     now = subtitle_streams(final)
-    return {position[s["index"]]: now[k] for k, s in enumerate(kept) if k in now}
+    return {position[item["index"]]: now[k] for k, item in enumerate(_sub_plan(source_info, new_langs))
+            if isinstance(item, dict) and k in now}
 
 
 _COVER_TYPES = {"mjpeg": ("jpg", "image/jpeg"), "png": ("png", "image/png"),
@@ -117,48 +117,55 @@ def _extract_covers(source: Path, info: dict, work: Path) -> List[tuple]:
 
 def _mux_args(source: Path, info: dict, srt_paths: List[tuple], tmp: Path, covers: Sequence[tuple] = (),
               origins: Mapping[str, str] = {}, reviewed: Collection[str] = (),
-              audio_tag: Optional[str] = None) -> List[str]:
-    """The ffmpeg command writing the temp MKV: every video, audio and attachment stream copied, cover pictures
-    re-attached as files, kept subtitles copied (MP4 text → SRT), our replaced tracks dropped, new SRT tracks
-    added. Chapters and global metadata follow by ffmpeg's default. Data streams (MP4 timecode) are not carried by
-    MKV: dropped, logged."""
+              audio_tag: Optional[str] = None, extra: Mapping[str, Mapping[str, str]] = {}, *,
+              default_lang: Optional[str] = None, demoted: Collection[int] = ()) -> List[str]:
+    """The ffmpeg command writing the temp MKV: every video and audio stream copied, then the subtitles in the
+    order of media._sub_plan (kept ones copied, MP4 text → SRT; our replaced tracks dropped; each new SRT first in
+    its language), then attachments, cover pictures re-attached as files. Our track of `default_lang` is marked
+    « default », our others not; a kept track whose stream index is in `demoted` loses « default ». Chapters and
+    global metadata follow by ffmpeg's default. Data streams (MP4 timecode) are not carried by MKV: dropped, logged."""
     cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(source)]
     for _, p in srt_paths:
         cmd += ["-i", str(p)]
+    inputs = {lang: i + 1 for i, (lang, _) in enumerate(srt_paths)}
 
-    kept = {s["index"] for s in _kept_subs(info, {lang for lang, _ in srt_paths})}
-    out_idx = out_sub = 0
+    streams = info.get("streams", [])
+    out_idx = 0
+    maps: List[str] = []
     codec_args: List[str] = []
-    for s in info.get("streams", []):
+    for s in streams:
         kind, idx = s.get("codec_type"), s["index"]
-        if kind == "video" and _is_cover(s):
-            continue   # re-attached below from its extracted file
-        if kind in ("video", "audio", "attachment") or (kind == "subtitle" and idx in kept):
-            cmd += ["-map", f"0:{idx}"]
-            if kind != "attachment":
-                # Written explicitly: the MKV muxer otherwise marks the first subtitle « default » and turns an
-                # MP4 cover (attached_pic) into an ordinary video track a player may show instead of the film.
-                codec_args += [f"-disposition:{out_idx}", _disposition(s)]
-            if kind == "subtitle":
-                if s.get("codec_name") in _TEXT_TO_SRT:
-                    codec_args += [f"-c:s:{out_sub}", "srt"]
-                out_sub += 1
+        if kind in ("video", "audio") and not _is_cover(s):   # a cover is re-attached below from its file
+            maps += ["-map", f"0:{idx}"]
+            # Written explicitly: the MKV muxer otherwise marks the first subtitle « default » and turns an
+            # MP4 cover (attached_pic) into an ordinary video track a player may show instead of the film.
+            codec_args += [f"-disposition:{out_idx}", _disposition(s)]
             out_idx += 1
         elif kind == "data":
             logger.warning("%s: data stream #%s (%s) is not carried into MKV", source.name, idx, s.get("codec_tag_string"))
+    meta: List[str] = []
+    for k, item in enumerate(_sub_plan(info, list(inputs))):
+        if isinstance(item, dict):
+            maps += ["-map", f"0:{item['index']}"]
+            codec_args += [f"-disposition:{out_idx}", _disposition(item, demoted=item["index"] in demoted)]
+            if item.get("codec_name") in _TEXT_TO_SRT:
+                codec_args += [f"-c:s:{k}", "srt"]
+        else:
+            lang = item
+            maps += ["-map", f"{inputs[lang]}:0"]
+            codec_args += [f"-c:s:{k}", "srt", f"-disposition:{out_idx}", "default" if lang == default_lang else "0"]
+            tags = {"language": Language.fromalpha2(lang).alpha3b, "title": substudio_track_title(lang),
+                    ORIGIN_TAG: origins[lang], **({REVIEWED_TAG: REVIEWED_YES} if lang in reviewed else {}),
+                    **extra.get(lang, {})}
+            for key, value in tags.items():
+                meta += [f"-metadata:s:s:{k}", f"{key}={value}"]
+        out_idx += 1
+    maps += [x for s in streams if s.get("codec_type") == "attachment" for x in ("-map", f"0:{s['index']}")]
 
-    cmd += ["-c", "copy", *codec_args]
+    cmd += [*maps, "-c", "copy", *codec_args, *meta]
     if audio_tag:
         # The first audio stream of the output is the source's first (mapped in source order): what « OV » reads.
         cmd += ["-metadata:s:a:0", f"language={Language.fromalpha2(audio_tag).alpha3b}"]
-    for i, (lang, _) in enumerate(srt_paths):
-        k = out_sub + i
-        cmd += ["-map", f"{i + 1}:0", f"-c:s:{k}", "srt", f"-disposition:{out_idx + i}", "0",
-                f"-metadata:s:s:{k}", f"language={Language.fromalpha2(lang).alpha3b}",
-                f"-metadata:s:s:{k}", f"title={substudio_track_title(lang)}",
-                f"-metadata:s:s:{k}", f"{ORIGIN_TAG}={origins[lang]}"]
-        if lang in reviewed:
-            cmd += [f"-metadata:s:s:{k}", f"{REVIEWED_TAG}={REVIEWED_YES}"]
     n_att = sum(1 for s in info.get("streams", []) if s.get("codec_type") == "attachment")
     for j, (p, mime, name) in enumerate(covers):
         cmd += ["-attach", str(p), f"-metadata:s:t:{n_att + j}", f"mimetype={mime}",
@@ -211,6 +218,9 @@ def update_in_place(
     origins: Mapping[str, str],
     reviewed: Collection[str] = (),
     audio_language: Optional[str] = None,
+    untranslated: Mapping[str, Collection[int]] = {},
+    from_languages: Mapping[str, str] = {},
+    rejected: Collection[int] = (),
     job: Optional[JobHandle] = None,
 ) -> OutputResult:
     """Writes `tracks` ({iso 639-1: cues}) into `source` by the verified swap and renames it with the marker of
@@ -219,7 +229,12 @@ def update_in_place(
     so the Library reads how it was obtained after a rescan. `reviewed` (languages of `tracks`) also get the
     REVIEWED_TAG: a person checked them in the Review screen. `audio_language` (the language the run detected, sure
     enough to trust) is written on the first audio stream only when the source's is untagged or « und »: a tagged
-    stream is never retagged, and the tag alone never causes a swap.
+    stream is never retagged, and the tag alone never causes a swap. `from_languages` ({lang: source language}) and
+    `untranslated` ({lang: ids of `tracks` cues left in that language}) become the FROM_TAG and UNTRANSLATED_TAG of a
+    new track, the ids turned into the track's positions 1..n (a cue past the end is dropped, so it is not listed).
+    Each new track comes first among its language's subtitles; the one of the first validated language is marked
+    « default ». `rejected` (positions among the source's subtitle streams, the ladder's refs) are the old tracks the
+    gate refused: one of a language written here loses « default », and is kept.
 
     Nothing new → untouched (no rename). Raises OutputError (source unchanged) on any failed step,
     JobAborted (source unchanged) on Cancel."""
@@ -244,19 +259,23 @@ def update_in_place(
         if o not in ORIGINS or o == "kept":
             raise ValueError(f"{lang}: origin must be one of {[x for x in ORIGINS if x != 'kept']}, got {o!r}")
     audio_code = _iso1(audio_language) if audio_language else None
+    left = {_iso1(lang): set(ids) for lang, ids in untranslated.items() if ids}
+    source_lang = {_iso1(lang): _iso1(f) for lang, f in from_languages.items() if f}
 
     lock = _lock_for(source)
     if not lock.acquire(blocking=False):
         raise OutputBusy(f"{source.name} is already being updated by another job")
     try:
         return _swap(source, new, validated, {l: origin_of[l] for l in new}, {_iso1(l) for l in reviewed} & set(new),
-                     audio_code, job)
+                     audio_code, job, left=left, source_lang=source_lang, rejected=set(rejected))
     finally:
         lock.release()
 
 
 def _swap(source: Path, new: Dict[str, List[Cue]], validated: List[str], origins: Dict[str, str],
-          reviewed: Set[str], audio_language: Optional[str], job: Optional[JobHandle]) -> OutputResult:
+          reviewed: Set[str], audio_language: Optional[str], job: Optional[JobHandle], *,
+          left: Mapping[str, Set[int]] = {}, source_lang: Mapping[str, str] = {},
+          rejected: Set[int] = frozenset()) -> OutputResult:
     if not source.is_file():
         raise OutputError(f"the source {source.name} does not exist")
     final = source.with_name(marked_name(source, validated))
@@ -271,9 +290,15 @@ def _swap(source: Path, new: Dict[str, List[Cue]], validated: List[str], origins
     info = _probe(source)
     duration = _duration(info)
     audio_tag = audio_language if audio_language and _untagged_audio(info) else None
+    first = _iso1(validated[0])
+    default_lang = first if first in new else None     # a kept first language keeps its own flags
+    old = [s for s in info.get("streams", []) if s.get("codec_type") == "subtitle"]
+    demoted = {old[p]["index"] for p in rejected if 0 <= p < len(old)
+               and normalize_language(old[p].get("tags", {}).get("language")) in new}
     with tempfile.TemporaryDirectory(prefix="substudio-out-") as work:
         srt_paths: List[tuple] = []
         expected: Dict[str, int] = {}
+        extra: Dict[str, Dict[str, str]] = {}
         for lang, cues in new.items():
             kept = drop_after(cues, duration)
             if not kept:
@@ -282,15 +307,22 @@ def _swap(source: Path, new: Dict[str, List[Cue]], validated: List[str], origins
             p.write_text(to_srt(kept), encoding="utf-8")
             srt_paths.append((lang, p))
             expected[lang] = len(kept)
+            extra[lang] = {}
+            if lang in source_lang:
+                extra[lang][FROM_TAG] = source_lang[lang]
+            positions = [n for n, c in enumerate(kept, start=1) if c.id in left.get(lang, ())]
+            if positions:
+                extra[lang][UNTRANSLATED_TAG] = cue_ids_value(positions)
 
         tmp = _new_temp(source)
         try:
             covers = _extract_covers(source, info, Path(work))
-            result = _run(_mux_args(source, info, srt_paths, tmp, covers, origins, reviewed, audio_tag), job)
+            result = _run(_mux_args(source, info, srt_paths, tmp, covers, origins, reviewed, audio_tag, extra,
+                                    default_lang=default_lang, demoted=demoted), job)
             if result.returncode != 0:
                 raise OutputError(f"ffmpeg could not write the new file: "
                                   f"{result.stderr.decode('utf-8', 'replace').strip()[:300]}")
-            _verify(info, tmp, expected, origins, reviewed, audio_tag)
+            _verify(info, tmp, expected, origins, reviewed, audio_tag, extra, default_lang=default_lang, demoted=demoted)
             # The one moment the library changes.
             try:
                 _place(tmp, final, source)
@@ -313,7 +345,7 @@ def _swap(source: Path, new: Dict[str, List[Cue]], validated: List[str], origins
                               f"removed ({e}); delete it by hand") from e
     logger.info("Updated %s → %s (+%s)", source.name, final.name, ",".join(new))
     try:
-        subs = _moved_subs(info, _kept_subs(info, set(new)), final)
+        subs = _moved_subs(info, list(new), final)
     except OutputError as e:
         # The update is done and verified; without the map, the kept tracks just read « not checked yet ».
         logger.error("Updated %s, but could not re-read its subtitle streams (%s): their verdicts are not recorded",

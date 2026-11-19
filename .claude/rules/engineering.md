@@ -199,6 +199,10 @@ and lost on restart.
 - `backend/core/output/` — the only output: `write_run` updates the source **in place** by a verified swap
   (temp file → verify streams, flags, duration, new tracks → atomic rename), adds the `(Sub-EN,FR)` marker of the
   actual languages, tags each new track with its origin (`core/provenance`), leaves an untouched video as it was.
+  Subtitle order (`media._sub_plan`, rechecked by the verify step): each new track comes first among its language's
+  tracks, « default » only for the first validated language; an old embedded track the gate rejected, in a
+  language written, loses « default » and is kept (never deleted). A player given « English » takes the first
+  English track: on S05E21 it was the rejected one.
 - `backend/core/subtitle_processor.py` — finds the first embedded text track and extracts it as
   cues (raises on failure). **Currently unused** — see the workspace `TODOLIST.MD` (« [SubStudio] backlog »).
 - `backend/core/events.py` — `EventManager`, one broadcast channel per `file_id`, thread-safe.

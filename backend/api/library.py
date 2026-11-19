@@ -14,8 +14,8 @@ from typing import Dict, List, Optional, Tuple
 
 import langcodes
 
-from core.provenance import (ORIGIN_TAG, ORIGINS, OV, REJECTED, REVIEWED_TAG, REVIEWED_YES, is_substudio_track,
-                             parse_name_marker, track_key)
+from core.provenance import (FROM_TAG, ORIGIN_TAG, ORIGINS, OV, REJECTED, REVIEWED_TAG, REVIEWED_YES, UNTRANSLATED_TAG,
+                             is_substudio_track, parse_cue_ids, parse_name_marker, track_key)
 
 from .config import MEDIA_ROOT
 from .schemas import LanguageCoverage, LibraryResponse, LibraryVideo, Settings, SubtitleTrack
@@ -186,7 +186,9 @@ def _embedded(probe: _Probe) -> List[SubtitleTrack]:
         tracks.append(SubtitleTrack(kind="embedded", language=_language(tag), language_tag=tag,
                                     stream_index=s.get("index"), codec=s.get("codec_name"),
                                     title=tags.get("TITLE"), origin=origin if origin in ORIGINS else None,
-                                    reviewed=(tags.get(REVIEWED_TAG) or "").lower() == REVIEWED_YES, counted=False))
+                                    reviewed=(tags.get(REVIEWED_TAG) or "").lower() == REVIEWED_YES,
+                                    from_language=_language(tags.get(FROM_TAG)),
+                                    untranslated=len(parse_cue_ids(tags.get(UNTRANSLATED_TAG))), counted=False))
     return tracks
 
 
@@ -259,8 +261,10 @@ def _coverage(wanted: str, audio: Optional[str], tracks: List[SubtitleTrack], pr
         # the contract for records written before the gate.
         best = next((t for t in counted if t.made_by_substudio), counted[0])
         origin = best.origin if best.made_by_substudio else "existing"
+        ours = best.made_by_substudio
         return LanguageCoverage(language=wanted, resolved=lang, state="passed", origin=origin, path=best.path,
-                                reviewed=best.made_by_substudio and best.reviewed)
+                                reviewed=ours and best.reviewed, from_language=best.from_language if ours else None,
+                                untranslated=best.untranslated if ours else 0)
     if probe_error:
         # A track inside the video (ours included) may exist unseen: not « missing ».
         return LanguageCoverage(language=wanted, resolved=lang, state="unknown", reason=probe_error)
