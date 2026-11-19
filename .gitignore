@@ -26,5 +26,8 @@ _archive/
 bench/clips/
 bench/clips.local.json
 
+# Gate bench work files (tracks extracted from real media, speech caches)
+bench/gate_work/
+
 # UI API state (settings.json)
 backend/state/

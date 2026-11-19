@@ -47,7 +47,7 @@ def measure(command: list[str], watch: list[str] | None = None, interval: float 
     own_peaks: dict[int, int] = {}
     names_read: set[str] = set()
     unreadable: set[str] = set()
-    peak_sampled = 0
+    peak_sampled = peak_alive = 0
     cpu_samples: list[float] = []
     # Windows CreateProcess does not resolve a relative "dir/prog" path or a missing .exe suffix: resolve it here.
     program = shutil.which(command[0])
@@ -57,7 +57,7 @@ def measure(command: list[str], watch: list[str] | None = None, interval: float 
     child = subprocess.Popen([program, *command[1:]])
     root = psutil.Process(child.pid)
     while child.poll() is None:
-        rss, cpu = 0, 0.0
+        rss, cpu, alive_peaks = 0, 0.0, 0
         for pid, p in _tree(root, watch_names).items():
             proc = seen.setdefault(pid, p)
             try:
@@ -72,17 +72,21 @@ def measure(command: list[str], watch: list[str] | None = None, interval: float 
             rss += mem.rss
             # Windows keeps each process's own peak working set, which catches a spike between two samples.
             own_peaks[pid] = max(own_peaks.get(pid, 0), getattr(mem, "peak_wset", mem.rss))
+            alive_peaks += own_peaks[pid]
             names_read.add(name)
         peak_sampled = max(peak_sampled, rss)
+        # Summing only processes alive together: summing every process ever seen added dozens of short ffmpeg runs
+        # that never coexisted (6.2 GB reported for a 0.2 GB run, 2026-11-19).
+        peak_alive = max(peak_alive, alive_peaks)
         cpu_samples.append(cpu / 100.0)
         time.sleep(interval)
     wall = time.monotonic() - start
     # The first cpu_percent call of each process returns 0 by design, so the first sample is dropped from the mean.
     steady = cpu_samples[1:] or cpu_samples
     peak_threads = round(max(steady, default=0.0), 2)
-    # Sum of each process's own peak: exact for one process, an upper bound for several (their peaks may not
-    # coincide). The budget is judged on it, so a spike between samples cannot pass as within budget.
-    peak_gb = round(max(peak_sampled, sum(own_peaks.values())) / _GB, 3)
+    # Per sample, the sum of each live process's own peak: exact for one process, an upper bound for several (their
+    # peaks may not coincide). The budget is judged on it, so a spike between samples cannot pass as within budget.
+    peak_gb = round(max(peak_sampled, peak_alive) / _GB, 3)
     watch_missing = sorted(watch_names - names_read)
     return {
         "command": command,
