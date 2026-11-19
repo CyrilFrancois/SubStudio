@@ -57,11 +57,13 @@ class Verdict:
 
 def evaluate(cues: Sequence[Cue], speech: Sequence[Span], language: str, label: Optional[str] = None,
              duration_ms: Optional[int] = None, source: Optional[Sequence[Cue]] = None,
-             limits: Optional[dict] = None) -> Verdict:
+             limits: Optional[dict] = None, timing_from_audio: bool = False) -> Verdict:
     """Gate one subtitle against the speech of its video, for the cell `language` (the language wanted, any tag
     form). `label` is the tag the track carries, if any: a missing tag is not a fault (Ghosts S05E22's English
     track has none), a wrong one is. `source` is given for a translation: its id set must equal the source's, and
-    no cue may be left as the source text."""
+    no cue may be left as the source text. `timing_from_audio` is True when the cue times were made from this
+    video's own audio (a Whisper transcript, or a translation of one): when the speech has too few pauses to measure
+    an offset, such timing passes, while a kept or downloaded track's cannot be shown in sync and does not."""
     t = {**THRESHOLDS, **(limits or {})}
     s = measure_sync(cues, speech, duration_ms)
     x = measure_text(cues, t["max_cps"], t["max_line_chars"])
@@ -71,9 +73,14 @@ def evaluate(cues: Sequence[Cue], speech: Sequence[Span], language: str, label: 
         raise ValueError(f"not a language: {language!r}")
     tagged = normalize_language(label)
     language_ok = x.language == wanted and tagged in (None, wanted)
+    if s.offset_ms is None:  # too few speech pauses to locate a shift (a short clip): not measured, not « 0 »
+        offset_check = Check("offset_ms", None, t["max_offset_ms"], timing_from_audio,
+                             "timing not checked: too little speech in this video to measure the sync")
+    else:
+        offset_check = Check("offset_ms", s.offset_ms, t["max_offset_ms"], abs(s.offset_ms) <= t["max_offset_ms"],
+                             f"out of sync: shifted {s.offset_ms / 1000:+.1f} s from the speech")
     checks = [
-        Check("offset_ms", s.offset_ms, t["max_offset_ms"], abs(s.offset_ms) <= t["max_offset_ms"],
-              f"out of sync: shifted {s.offset_ms / 1000:+.1f} s from the speech"),
+        offset_check,
         # Not measurable (too few cues per half) is shown as None, not as 0: the offset and on-speech checks still apply.
         Check("drift_ms", s.drift_ms, t["max_drift_ms"],
               s.drift_ms is None or abs(s.drift_ms) <= t["max_drift_ms"],
