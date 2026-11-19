@@ -53,7 +53,7 @@ def _resolve_wanted(wanted: Iterable[str], original: Optional[str]) -> List[str]
 
 
 def plan(wanted: Iterable[str], existing: Iterable[ExistingSub], original_language: Optional[str] = None,
-         downloads_enabled: bool = True, count_existing: bool = False) -> List[LanguagePlan]:
+         downloads_enabled: bool = True) -> List[LanguagePlan]:
     """Per language, the ordered steps of Cyril's ladder (doc/user-process.md §2); each result is gated, and a
     failure falls to the next step. `wanted` may hold « OV » (the audio language, `original_language`).
 
@@ -61,11 +61,11 @@ def plan(wanted: Iterable[str], existing: Iterable[ExistingSub], original_langua
     only to give TRANSLATE a human source): the executor runs rungs 1–2 for every language before any rung 3.
     Raises ValueError for a language that cannot be named, rather than planning a track nobody can tag.
     """
-    # Subtitles already there are not considered by default: an older SubStudio wrote bad muxed tracks (« AI FR ») and
-    # plain {stem}.{lang}.srt sidecars that nothing tells apart from a release's own (Cyril, 2026-11-19). Only what
-    # the current SubStudio marked (core/provenance.is_substudio_track), or everything once Settings.count_existing
-    # is on, is evaluated. user-process.md §3: count_existing stays off until the gate is shown to reject the old ones.
-    existing = [s for s in existing if (s.marked or count_existing) and s.language]
+    # Every subtitle already there is a rung-1 candidate, unmarked ones included: Cyril (2026-11-19, via the Steward)
+    # wants the « English (SDH) » tracks of C:\Videos CHECKED, since they may be good release captions. What keeps
+    # the old SubStudio's bad tracks out is the quality gate each EXISTING step ends at, never a filter here. A track
+    # with no language tag cannot be checked against a language, so it is left out.
+    existing = [s for s in existing if s.language]
     original = normalize_language(original_language)
     wanted_langs = _resolve_wanted(wanted, original)
 
@@ -79,8 +79,9 @@ def plan(wanted: Iterable[str], existing: Iterable[ExistingSub], original_langua
     for lang in ordered:
         source_only = lang not in wanted_langs
         steps: List[Step] = []
-        # A text subtitle before a bitmap one: it can be re-timed, checked and translated.
-        for s in sorted((s for s in existing if s.language == lang), key=lambda s: (not s.text, s.kind != "sidecar")):
+        # Ours first (most likely to pass), then text before bitmap (a text one can be re-timed, checked, translated).
+        for s in sorted((s for s in existing if s.language == lang),
+                        key=lambda s: (not s.marked, not s.text, s.kind != "sidecar")):
             if s.text or not source_only:
                 steps.append(Step(Rung.EXISTING, lang, source=s))
         if downloads_enabled and (not source_only or lang == original):
