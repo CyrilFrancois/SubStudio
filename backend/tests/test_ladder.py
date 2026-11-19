@@ -206,3 +206,142 @@ def test_retry_searches_with_the_video_as_it_is_now(monkeypatch):
     run.cells["fr"].state = CellState.PENDING
     asyncio.run(retry.fill("fr"))
     assert seen == ["v (Sub-EN).mkv"]
+
+
+def test_each_source_gets_the_context_with_its_own_names():
+    # The glossary must hold the names of the subtitle actually being translated (core/context.get_context).
+    from core.subtitles import TranslationContext
+    seen = []
+
+    def context(c):
+        seen.append(c)
+        return TranslationContext(title="Ghosts (2021) S05E07", glossary=("Hetty",) if c else ())
+    ours = ExistingSub("en", "embedded", "0", marked=True)
+    run, ladder, _, _ = make(["en", "fr"], [ours], downloads=False)
+    ladder.deps.context = context
+    go(run, ladder)
+    src = run.human["en"]
+    assert src.context.glossary == ("Hetty",) and src.context.source_lang == "en" and not src.context.source_is_asr
+    assert seen and seen[0] == src.cues
+
+
+def test_offline_context_says_why_nothing_was_looked_up():
+    pytest.importorskip("faster_whisper")
+    import main
+    ctx = main.PipelineOrchestrator()._context("C:/x/Ghosts.2021.S05E07.mkv")  # conftest: SUBSTUDIO_DOWNLOADS=0
+    assert "online lookups are off" in ctx.missing and ctx.season == 5 and ctx.episode == 7
+
+
+# --- the quality gate (core/gate.evaluate) on every rung -----------------------------------------------------------
+class _Gate:
+    """Records each call; rejects the languages in `reject` with a sentence, like Verdict.reason."""
+
+    def __init__(self, reject=()):
+        self.reject, self.calls = set(reject), []
+
+    def __call__(self, cues_, speech, lang, label=None, duration_ms=None, source=None):
+        from core.gate import Check, Verdict
+        self.calls.append((lang, label, source is not None, duration_ms))
+        ok = lang not in self.reject
+        why = "" if ok else f"{lang}: 41 % of lines overlap speech (min 85 %)"
+        return Verdict(ok, [Check("sync", 0.41, 0.85, ok, why)])
+
+
+def gated(wanted, existing=(), reject=(), fetched=None, count_existing=True, **kw):
+    run, ladder, asr, fetches = make(wanted, existing, fetched=fetched, **kw)
+    speech_reads = []
+    ladder.deps.gate = _Gate(reject)
+    ladder.deps.speech = lambda: speech_reads.append(1) or ([(0, 1500), (2000, 3500)], 9000)
+    ladder.deps.count_existing = count_existing
+    return run, ladder, asr, fetches, speech_reads
+
+
+def test_unmarked_existing_counts_when_the_gate_passes_it():
+    # Cyril, 2026-11-19: count_existing on, gated — a good release track leaves the file as is for that language.
+    sdh = ExistingSub("en", "embedded", "0")
+    run, ladder, asr, fetches, reads = gated(["en"], [sdh], original="en")
+    cells = go(run, ladder)
+    assert cells["en"]["origin"] == "kept" and fetches == [] and ladder.deps.gate.calls[0][:2] == ("en", "en")
+
+
+def test_rejected_existing_falls_through_with_the_gate_sentence(monkeypatch):
+    sdh = ExistingSub("en", "embedded", "0")
+    fetched = FetchResult({"en": Acquired("en", "en.srt", "gestdown", False, True, 0.1)})
+    run, ladder, _, fetches, _ = gated(["en"], [sdh], reject=(), fetched=fetched, original="en")
+    calls = {"n": 0}
+    inner = ladder.deps.gate
+
+    def first_rejected(*a, **k):  # the embedded track fails, the download passes
+        calls["n"] += 1
+        return _Gate(reject=("en",))(*a, **k) if calls["n"] == 1 else inner(*a, **k)
+    ladder.deps.gate = first_rejected
+    monkeypatch.setattr("core.ladder.load_file", lambda path: cues(ENGLISH))
+    cells = go(run, ladder)
+    assert cells["en"]["attempts"] == ["existing: en embedded rejected: en: 41 % of lines overlap speech (min 85 %)"]
+    assert cells["en"]["origin"] == "downloaded" and fetches == [["en"]]
+
+
+def test_count_existing_off_never_checks_an_unmarked_subtitle():
+    sdh = ExistingSub("en", "embedded", "0")
+    run, ladder, _, _, reads = gated(["en"], [sdh], count_existing=False, downloads=False, original="en")
+    go(run, ladder)
+    assert run.cells["en"].attempts[0] == "existing: ignored: en embedded"
+    assert ("en", "en", False, 9000) not in ladder.deps.gate.calls  # the track itself was never gated
+
+
+def test_rejected_download_is_noted_and_not_used(monkeypatch):
+    fetched = FetchResult({"fr": Acquired("fr", "fr.srt", "gestdown", False, True, 0.1)})
+    run, ladder, _, _, _ = gated(["fr"], reject=("fr",), fetched=fetched, original="en")
+    monkeypatch.setattr("core.ladder.load_file", lambda path: cues(FRENCH))
+    cells = go(run, ladder)
+    assert cells["fr"]["attempts"][0] == "download: rejected: fr: 41 % of lines overlap speech (min 85 %)"
+
+
+def test_translated_cell_is_gated_against_its_source_and_fails_with_the_sentence():
+    ours = ExistingSub("en", "embedded", "0", marked=True)
+    run, ladder, asr, _, reads = gated(["en", "fr"], [ours], reject=("fr",), downloads=False)
+    cells = go(run, ladder)
+    assert cells["en"]["state"] == "passed"
+    assert cells["fr"]["state"] == "failed" and cells["fr"]["reason"] == "fr: 41 % of lines overlap speech (min 85 %)"
+    assert ("fr", None, True, 9000) in ladder.deps.gate.calls        # source cues given for a translation
+    assert reads == [1] and asr == []                                 # speech read once for the whole video
+
+
+def test_a_gate_that_cannot_measure_rejects_instead_of_crashing_the_video():
+    def no_speech(*a, **k):
+        raise ValueError("no speech detected: sync cannot be measured")
+    ours = ExistingSub("en", "embedded", "0", marked=True)
+    run, ladder, _, _, _ = gated(["en"], [ours], downloads=False)
+    ladder.deps.gate = no_speech
+    cells = go(run, ladder)
+    assert cells["en"]["attempts"][0] == "existing: en embedded rejected: no speech detected: sync cannot be measured"
+
+
+def test_the_real_gate_passes_cues_that_sit_on_the_speech():
+    # A real episode's shape (120 lines over ~6 min; four lines are too few for the offset measure).
+    import random
+    from core.gate import evaluate
+    rnd, t, c = random.Random(5), 2000, []
+    for i in range(120):
+        d = rnd.randint(3000, 5000)
+        c.append(Cue(id=i + 1, start_ms=t, end_ms=t + d, text=ENGLISH[i % len(ENGLISH)]))
+        t += d + rnd.randint(400, 3000)
+    from core.gate import THRESHOLDS
+    from core.subtitles import wrap_lines
+    c = wrap_lines(c, THRESHOLDS["max_line_chars"])  # as the ladder writes them
+    v = evaluate(c, [(q.start_ms, q.end_ms) for q in c], "en", duration_ms=t + 5000)
+    assert v.passed, v.reason
+    shifted = [Cue(id=q.id, start_ms=q.start_ms + 4000, end_ms=q.end_ms + 4000, text=q.text) for q in c]
+    assert not evaluate(shifted, [(q.start_ms, q.end_ms) for q in c], "en", duration_ms=t + 9000).passed
+
+
+def test_count_existing_follows_the_saved_setting(monkeypatch):
+    pytest.importorskip("faster_whisper")
+    import api.settings_store as store
+    from api.schemas import Settings
+    import main
+    orch = main.PipelineOrchestrator()
+    monkeypatch.setattr(store, "load_settings", lambda: Settings(languages=["en"], count_existing=False))
+    assert orch.count_existing is False
+    monkeypatch.setattr(store, "load_settings", lambda: Settings(languages=["en"]))
+    assert orch.count_existing is True                                 # the default: on (D-0002)

@@ -30,7 +30,7 @@ logger = logging.getLogger("SubStudio.Translate")
 class TranslationContext:
     """What a backend may use besides the texts. Only facts; a backend ignores what it cannot use."""
     title: str = ""                                      # e.g. from the filename
-    notes: str = ""                                      # free text (today: the Gemini story bible)
+    notes: str = ""                                      # free text: the looked-up facts (core/context)
     glossary: Sequence[str] = ()                         # names and terms to keep untranslated
     source_lang: Optional[str] = None                    # ISO 639-1 when known
     source_is_asr: bool = False                          # machine-transcribed: may hold phonetic errors
@@ -50,6 +50,10 @@ class Translator(Protocol):
     batch_size: int    # cues per call that this backend handles well
 
     def translate(self, cues: List[CueText], target: str, context: TranslationContext) -> List[CueText]: ...
+
+    # Called by the orchestrator after each video's languages, success or not: a local backend frees its model
+    # so it never shares RAM with the next transcription (D-0001). A backend holding nothing does nothing.
+    def unload(self) -> None: ...
 
 
 class TranslationFailed(RuntimeError):

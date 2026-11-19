@@ -3,7 +3,9 @@
 **Date:** 2026-11-19 · **Decided by:** Cyril · **Status:** accepted. In-place replacement confirmed by Cyril the same
 day (via the Steward): « Yes, everywhere, after the check », `C:\Videos` included. Also answered the same day: an
 untouched video keeps its name (no marker); the marker lists the actual languages, `(Sub-EN,FR)`; MP4 is converted to
-MKV; the « English (SDH) » tracks of `C:\Videos` are evaluated, and accepted as references when in sync.
+MKV; the « English (SDH) » tracks of `C:\Videos` are evaluated, and accepted as references when in sync. Later the
+same day, once the gate was measured (16 of 17 Ghosts English tracks pass, S05E21 fails): « Yes, keep them when the
+check passes », so `count_existing` defaults ON and a pre-existing subtitle counts only when the gate passes it.
 
 **Context.** The architecture review proposed a subtitle ladder (existing → download → translate → ASR) and sidecar
 `.srt` files as the default output; the UI review proposed a coverage matrix. Neither said what Cyril himself does,

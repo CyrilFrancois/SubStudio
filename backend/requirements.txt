@@ -20,6 +20,8 @@ langdetect
 pysubs2==1.9.1
 charset-normalizer==3.5.2
 ffmpeg-python
+# Local translation: renders the model's own chat template (TranslateGemma's needs language codes)
+jinja2==3.1.6
 
 # Subtitle ladder (core/acquire): free providers, then re-timing to the audio
 subliminal==2.8.0

@@ -185,7 +185,8 @@ class Settings(BaseModel):
     replaced in place after the check, renamed with '(Sub-OV,EN,FR)'."""
     languages: List[LanguageCode] = Field(..., min_length=1, description="Wanted languages, 'ov' included: the only list every picker reads.")
     count_existing: bool = Field(
-        False, description="Count subtitles not made by this SubStudio (core/provenance.py) as coverage. Off: listed, not trusted."
+        True, description="Count subtitles not made by this SubStudio (core/provenance.py) when the quality gate passes them "
+        "(on by default: Cyril, 2026-11-19, D-0002). Off: listed, never counted, never checked."
     )
 
 
