@@ -317,6 +317,19 @@ def scan_library(settings: Settings) -> LibraryResponse:
                            scanned_at=datetime.now(timezone.utc), videos=videos, warnings=warnings)
 
 
+def audio_language(path: str) -> Optional[str]:
+    """What « ov » stands for in this video: its first audio track's language tag, from the same cached probe as the
+    Library. None when untagged or unreadable. Blocking (ffprobe on a cache miss)."""
+    return _audio_language(_probe_cached(path, os.stat(path)))
+
+
+def remember(path: str) -> str:
+    """Registers a video a write just renamed (the swap's new marker), so its new id resolves before the next scan."""
+    vid = video_id(path)
+    _paths[vid] = path
+    return vid
+
+
 def video_path(vid: str) -> Optional[str]:
     """Resolve an id from the last scan; None when unknown (the caller answers 404)."""
     return _paths.get(vid)

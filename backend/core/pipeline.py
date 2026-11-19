@@ -229,7 +229,7 @@ class PipelineOrchestrator:
         try:
             cell = run.cells[lang_code]
             # Rungs 1–2 ran for every language and their sources are kept: a retry redoes rungs 3–4 only.
-            cell.state, cell.reason, cell.cues = CellState.PENDING, "", None
+            cell.state, cell.reason, cell.cues, cell.reviewed = CellState.PENDING, "", None, False
             cell.attempts = [a for a in cell.attempts if a.startswith(("existing", "download"))]
             async with self._translation():
                 await self._run_cell(run, self._ladder(run, video, opts, job, p, 0, 1), lang_code, job, p)

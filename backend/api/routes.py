@@ -8,7 +8,7 @@ from typing import Iterable, List, Optional
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from . import library
+from . import library, subtitles
 from .config import MEDIA_ROOT, STUB
 from .events_hub import hub
 from .review import flag_cues
@@ -113,21 +113,53 @@ async def events():
 
 # --- Subtitles -------------------------------------------------------------------------------
 
+def _video(video_id: str) -> str:
+    path = library.video_path(video_id)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Unknown video id; reload the library")
+    if not STUB and not os.path.isfile(path):
+        # A job or an earlier save renamed it since the last scan: the id names a file that is gone.
+        raise HTTPException(status_code=404, detail="This video was renamed or moved since the library was read; reload the library")
+    return path
+
+
+async def _cues(fn, *args) -> CueList:
+    """Runs one api/subtitles call off the event loop (ffprobe, ffmpeg, the swap) and turns its refusal into HTTP."""
+    if not job_runner.connected:
+        raise HTTPException(status_code=503, detail=NOT_CONNECTED)
+    try:
+        return await asyncio.to_thread(fn, job_runner.orchestrator, *args)
+    except subtitles.SubtitleError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+
+
 @router.get("/subtitles/{video_id}/{lang}", response_model=CueList)
 async def get_subtitles(video_id: str, lang: str):
-    if library.video_path(video_id) is None:
-        raise HTTPException(status_code=404, detail="Unknown video id; reload the library")
-    if not STUB:
-        raise HTTPException(status_code=501, detail="Reading subtitles for review arrives with the job store (workspace-6e, task 12).")
+    """The video's SubStudio track in `lang` ('ov' = the audio's language): cues by position, with the text each was
+    translated from while the run that made it is still in memory."""
+    path = _video(video_id)
+    if STUB:
+        return flag_cues(_stub().cues(video_id, lang))
     # Flags come from the gate's rules here, whatever store served the cues.
-    return flag_cues(_stub().cues(video_id, lang))
+    return flag_cues(await _cues(subtitles.get_cue_list, video_id, path, lang))
 
 
 @router.put("/subtitles/{video_id}/{lang}", response_model=CueList)
 async def put_subtitles(video_id: str, lang: str, body: CueList):
-    if not STUB:
-        raise HTTPException(status_code=501, detail="Saving edited subtitles arrives with the job store (workspace-6e, task 12).")
-    raise HTTPException(status_code=501, detail="Saving is not simulated in stub mode: nothing would be written.")
+    """Saves the edited text of every cue (ids and timings must be the file's: 409 otherwise) by the verified swap,
+    and marks the track reviewed. Answers the saved list, checked again; the video id changes only if the file was
+    renamed. flags and limits in the body are ignored."""
+    path = _video(video_id)
+    if STUB:
+        raise HTTPException(status_code=501, detail="Saving is not simulated in stub mode: nothing would be written.")
+    if not job_runner.connected:
+        raise HTTPException(status_code=503, detail=NOT_CONNECTED)
+    try:
+        # Entered here, on the event loop, before the first await: no job can start between the check and the claim.
+        with subtitles.editing(job_runner.orchestrator, path):
+            return flag_cues(await _cues(subtitles.save_cue_list, video_id, path, lang, body))
+    except subtitles.SubtitleError as e:      # the claim's refusal (a job holds the video)
+        raise HTTPException(status_code=e.status, detail=e.detail)
 
 
 # --- Settings and system ---------------------------------------------------------------------

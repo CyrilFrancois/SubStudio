@@ -1,4 +1,4 @@
-# inplace.py — The verified swap: put new subtitle tracks INTO the source video and rename it with a (Sub-EN,FR) marker, never losing the source. Exports: update_in_place, subtitle_streams, marked_name, OutputResult, OutputError.
+# inplace.py — The verified swap: put new subtitle tracks INTO the source video and rename it with a (Sub-EN,FR) marker, never losing the source. Exports: update_in_place, subtitle_streams, marked_name, OutputResult, OutputError, OutputBusy.
 """
 Cyril's rule (doc/user-process.md §4, D-0002; CLAUDE.md « Forbidden »): a source video is replaced only by this swap.
 
@@ -22,14 +22,15 @@ import tempfile
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Literal, Mapping, Optional, Sequence, Set
+from typing import Collection, Dict, List, Literal, Mapping, Optional, Sequence, Set
 
 import pysubs2
 from babelfish import Language
 
 from ..acquire.plan import normalize_language
 from ..jobs import JobAborted, JobHandle
-from ..provenance import ORIGIN_TAG, ORIGINS, is_substudio_track, name_marker, strip_name_marker, substudio_track_title
+from ..provenance import (ORIGIN_TAG, ORIGINS, REVIEWED_TAG, REVIEWED_YES, is_substudio_track, name_marker,
+                          strip_name_marker, substudio_track_title)
 from ..subtitles import Cue, drop_after, to_srt
 
 logger = logging.getLogger("SubStudio.Output")
@@ -48,6 +49,10 @@ _TEXT_TO_SRT = {"mov_text"}
 
 class OutputError(RuntimeError):
     """The swap did not happen; the source is unchanged (the message says why, in one sentence)."""
+
+
+class OutputBusy(OutputError):
+    """Another swap of the same video is running in this process; nothing was done (callers answer « busy »)."""
 
 
 @dataclass(frozen=True)
@@ -209,7 +214,7 @@ def _extract_covers(source: Path, info: dict, work: Path) -> List[tuple]:
 
 
 def _mux_args(source: Path, info: dict, srt_paths: List[tuple], tmp: Path, covers: Sequence[tuple] = (),
-              origins: Mapping[str, str] = {}) -> List[str]:
+              origins: Mapping[str, str] = {}, reviewed: Collection[str] = ()) -> List[str]:
     """The ffmpeg command writing the temp MKV: every video, audio and attachment stream copied, cover pictures
     re-attached as files, kept subtitles copied (MP4 text → SRT), our replaced tracks dropped, new SRT tracks
     added. Chapters and global metadata follow by ffmpeg's default. Data streams (MP4 timecode) are not carried by
@@ -246,6 +251,8 @@ def _mux_args(source: Path, info: dict, srt_paths: List[tuple], tmp: Path, cover
                 f"-metadata:s:s:{k}", f"language={Language.fromalpha2(lang).alpha3b}",
                 f"-metadata:s:s:{k}", f"title={substudio_track_title(lang)}",
                 f"-metadata:s:s:{k}", f"{ORIGIN_TAG}={origins[lang]}"]
+        if lang in reviewed:
+            cmd += [f"-metadata:s:s:{k}", f"{REVIEWED_TAG}={REVIEWED_YES}"]
     n_att = sum(1 for s in info.get("streams", []) if s.get("codec_type") == "attachment")
     for j, (p, mime, name) in enumerate(covers):
         cmd += ["-attach", str(p), f"-metadata:s:t:{n_att + j}", f"mimetype={mime}",
@@ -262,7 +269,8 @@ def _decoded_cue_count(path: Path, sub_index: int) -> int:
     return len(pysubs2.SSAFile.from_string(result.stdout.decode("utf-8", "replace"), format_="srt").events)
 
 
-def _verify(source_info: dict, tmp: Path, expected: Dict[str, int], origins: Optional[Mapping[str, str]] = None) -> None:
+def _verify(source_info: dict, tmp: Path, expected: Dict[str, int], origins: Optional[Mapping[str, str]] = None,
+            reviewed: Collection[str] = ()) -> None:
     """The check the swap depends on. Raises OutputError on the first difference."""
     out = _probe(tmp)
     before, after = _signature(source_info), _signature(out)
@@ -289,6 +297,9 @@ def _verify(source_info: dict, tmp: Path, expected: Dict[str, int], origins: Opt
         tags = {k.upper(): v for k, v in subs[found[0]].get("tags", {}).items()}
         if origins is not None and tags.get(ORIGIN_TAG) != origins[lang]:
             raise OutputError(f"the « {title} » track records origin {tags.get(ORIGIN_TAG)!r} instead of {origins[lang]!r}")
+        if (tags.get(REVIEWED_TAG) == REVIEWED_YES) != (lang in reviewed):
+            raise OutputError(f"the « {title} » track's reviewed mark is {tags.get(REVIEWED_TAG)!r}, expected "
+                              f"{REVIEWED_YES if lang in reviewed else 'none'}")
         decoded = _decoded_cue_count(tmp, found[0])
         if decoded != count:
             raise OutputError(f"the « {title} » track decodes to {decoded} cues instead of {count}")
@@ -336,12 +347,14 @@ def update_in_place(
     languages_validated: Sequence[str],
     *,
     origins: Mapping[str, str],
+    reviewed: Collection[str] = (),
     job: Optional[JobHandle] = None,
 ) -> OutputResult:
     """Writes `tracks` ({iso 639-1: cues}) into `source` by the verified swap and renames it with the marker of
     `languages_validated` (every language the file now carries validated: the new ones and the kept ones).
     `origins` ({lang: one of provenance.ORIGINS except "kept"}) is written as the ORIGIN_TAG of each new track,
-    so the Library reads how it was obtained after a rescan.
+    so the Library reads how it was obtained after a rescan. `reviewed` (languages of `tracks`) also get the
+    REVIEWED_TAG: a person checked them in the Review screen.
 
     Nothing new → untouched (no rename). Raises OutputError (source unchanged) on any failed step,
     JobAborted (source unchanged) on Cancel."""
@@ -368,15 +381,16 @@ def update_in_place(
 
     lock = _lock_for(source)
     if not lock.acquire(blocking=False):
-        raise OutputError(f"{source.name} is already being updated by another job")
+        raise OutputBusy(f"{source.name} is already being updated by another job")
     try:
-        return _swap(source, new, validated, {l: origin_of[l] for l in new}, job)
+        return _swap(source, new, validated, {l: origin_of[l] for l in new}, {_iso1(l) for l in reviewed} & set(new),
+                     job)
     finally:
         lock.release()
 
 
 def _swap(source: Path, new: Dict[str, List[Cue]], validated: List[str], origins: Dict[str, str],
-          job: Optional[JobHandle]) -> OutputResult:
+          reviewed: Set[str], job: Optional[JobHandle]) -> OutputResult:
     if not source.is_file():
         raise OutputError(f"the source {source.name} does not exist")
     final = source.with_name(marked_name(source, validated))
@@ -405,11 +419,11 @@ def _swap(source: Path, new: Dict[str, List[Cue]], validated: List[str], origins
         tmp = _new_temp(source)
         try:
             covers = _extract_covers(source, info, Path(work))
-            result = _run(_mux_args(source, info, srt_paths, tmp, covers, origins), job)
+            result = _run(_mux_args(source, info, srt_paths, tmp, covers, origins, reviewed), job)
             if result.returncode != 0:
                 raise OutputError(f"ffmpeg could not write the new file: "
                                   f"{result.stderr.decode('utf-8', 'replace').strip()[:300]}")
-            _verify(info, tmp, expected, origins)
+            _verify(info, tmp, expected, origins, reviewed)
             # The one moment the library changes.
             try:
                 _place(tmp, final, source)
