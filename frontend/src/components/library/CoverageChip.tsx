@@ -2,7 +2,7 @@
 "use client";
 
 import { AlertCircle, Check, CircleDashed, Clock, HelpCircle, Loader2, Minus } from 'lucide-react';
-import type { CoverageOrigin, LanguageCoverage } from '@/lib/types';
+import type { CoverageOrigin, LanguageCoverage, SubtitleTrack } from '@/lib/types';
 import { languageName } from '@/lib/languages';
 
 // Whole class strings: a Tailwind class assembled at runtime ships no CSS.
@@ -38,20 +38,38 @@ export function coverageLabel(c: LanguageCoverage): string {
   }
 }
 
-/** The one-sentence why, shown under the cell without a click (null when the label says it all). */
-export function coverageNote(c: LanguageCoverage): string | null {
+/** « 3 lines left in English »: a translation that let some lines through untranslated (≤ 10 %, workspace-6e). */
+export function leftNote(c: LanguageCoverage): string | null {
+  const n = c.untranslated ?? 0;
+  if (c.state !== 'passed' || n <= 0) return null;
+  return `${n} line${n === 1 ? '' : 's'} left in ${c.from_language ? languageName(c.from_language) : 'the source language'}`;
+}
+
+/** The why, shown under the cell without a click: one short line each, none when the label says it all. `tracks` are
+ *  the video's subtitles as listed by the Library, to say when an old one stays in the file unused. */
+export function coverageNotes(c: LanguageCoverage, tracks: SubtitleTrack[] = []): string[] {
   switch (c.state) {
-    case 'passed':
-      if (c.origin === 'existing') return 'counted without a check';
-      return c.from_language ? `from ${languageName(c.from_language)}` : null;
+    case 'passed': {
+      if (c.origin === 'existing') return ['counted without a check'];
+      const lang = c.language === 'ov' ? c.resolved : c.language;
+      // Ours is used and first in its language (workspace-6e's track order); an old one in the same language that
+      // the Library did not count stays in the file, never deleted, never the default.
+      const old = tracks.filter(t => lang && t.language === lang && !t.counted && !t.made_by_substudio);
+      const name = lang ? languageName(lang) : '';
+      return [
+        leftNote(c) ?? (c.from_language ? `from ${languageName(c.from_language)}` : null),
+        old.some(t => t.kind === 'embedded') ? `old ${name} track kept in the file, not used` : null,
+        old.some(t => t.kind === 'sidecar') ? `old ${name} subtitle file next to it, not used` : null,
+      ].filter((s): s is string => !!s);
+    }
     case 'missing':
-      if (c.language === 'ov' && !c.resolved) return 'detected from the audio at Start';
-      return c.reason ?? null;
-    case 'unchecked': return 'checked when the video is started';
-    case 'pending': return null;
-    case 'running': return null;
-    case 'failed': return c.reason ?? 'no reason recorded: open the job log in the Queue';
-    case 'unknown': return c.reason ?? null;
+      if (c.language === 'ov' && !c.resolved) return ['detected from the audio at Start'];
+      return c.reason ? [c.reason] : [];
+    case 'unchecked': return ['checked when the video is started'];
+    case 'pending': return [];
+    case 'running': return [];
+    case 'failed': return [c.reason ?? 'no reason recorded: open the job log in the Queue'];
+    case 'unknown': return c.reason ? [c.reason] : [];
   }
 }
 
@@ -82,16 +100,21 @@ function tooltip(c: LanguageCoverage): string {
     unknown: `Cannot tell whether ${lang} subtitles exist`,
   }[c.state];
   const reviewed = c.state === 'passed' && c.reviewed ? '. Checked by a person in Review' : '';
-  return c.reason ? `${base}${reviewed}. ${c.reason}` : `${base}${reviewed}`;
+  const left = leftNote(c);
+  const leftWhy = left ? `. ${left}: the translator kept them as they were; Review shows them` : '';
+  return c.reason ? `${base}${reviewed}${leftWhy}. ${c.reason}` : `${base}${reviewed}${leftWhy}`;
 }
 
 export default function CoverageChip({ coverage }: { coverage: LanguageCoverage }) {
   const ignored = coverage.state === 'missing' && coverage.reason?.startsWith('ignored');
   const rejected = coverage.state === 'missing' && coverage.reason?.startsWith('rejected');
+  // Not a clean ✓: a translation with lines left in the source language says so on the chip itself.
+  const left = coverage.state === 'passed' ? coverage.untranslated ?? 0 : 0;
   return (
     <span
       title={tooltip(coverage)}
-      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border text-xs whitespace-nowrap ${STYLE[coverage.state]}`}
+      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border text-xs whitespace-nowrap ${
+        left ? 'bg-emerald-500/10 text-emerald-300 border-amber-500/50' : STYLE[coverage.state]}`}
     >
       <Icon state={coverage.state} />
       {coverageLabel(coverage)}
@@ -100,6 +123,7 @@ export default function CoverageChip({ coverage }: { coverage: LanguageCoverage 
       )}
       {ignored && <span className="text-gray-500">· old ignored</span>}
       {rejected && <span className="text-red-300">· old rejected</span>}
+      {left > 0 && <span className="text-amber-300">· {left} left</span>}
       {coverage.state === 'passed' && coverage.reviewed && <span className="text-emerald-200/80">· reviewed</span>}
     </span>
   );

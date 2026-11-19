@@ -3,7 +3,7 @@
 
 import { AlertTriangle } from 'lucide-react';
 import type { Cue, CueList } from '@/lib/types';
-import { cps, flagLabel, flagWhy, time } from './flags';
+import { cps, cueFlagLabel, flagWhy, time } from './flags';
 
 interface Props {
   cue: Cue | null;
@@ -56,7 +56,7 @@ export default function CuePreview({ cue, text, limits, sourceLabel }: Props) {
           {(cue.flags ?? []).map(f => (
             <li key={f} className="flex items-start gap-1.5 text-amber-300">
               <AlertTriangle size={13} className="shrink-0 mt-0.5" aria-hidden />
-              <span><span className="font-medium">{flagLabel(f)}:</span> {flagWhy(f, limits)}</span>
+              <span><span className="font-medium">{cueFlagLabel(f, cue)}:</span> {flagWhy(f, limits)}</span>
             </li>
           ))}
           {edited && <li className="text-gray-500 pl-5">Flags are from the saved text; they are measured again when you save.</li>}

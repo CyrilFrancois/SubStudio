@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { BadgeCheck, ChevronDown, ChevronRight, Folder, SlidersHorizontal } from 'lucide-react';
 import type { JobOptions, LanguageCoverage, LibraryVideo } from '@/lib/types';
 import { languageName } from '@/lib/languages';
-import CoverageChip, { coverageNote } from './CoverageChip';
+import CoverageChip, { coverageNotes } from './CoverageChip';
 import VideoDetails, { hasOverrides, NO_OVERRIDES } from './VideoDetails';
 
 export interface Row {
@@ -133,7 +133,7 @@ export default function LibraryTable({ groups, languages, selected, onSelect, ov
                     </span>
                     <span role="cell" className="text-xs text-gray-500 tabular-nums">{duration(video.duration_s)}</span>
                     {coverage.map(c => {
-                      const note = coverageNote(c);
+                      const notes = coverageNotes(c, video.tracks);
                       return (
                         <span role="cell" key={c.language} className="min-w-0">
                           {c.state === 'passed' ? (
@@ -145,7 +145,10 @@ export default function LibraryTable({ groups, languages, selected, onSelect, ov
                             </Link>
                           ) : <CoverageChip coverage={c} />}
                           {/* The verdict's reason in words, visible without hovering (D-0002 §5). */}
-                          {note && <span className="block mt-0.5 text-[11px] leading-snug text-gray-500 line-clamp-2" title={note}>{note}</span>}
+                          {notes.map(n => (
+                            <span key={n} title={n} className={`block mt-0.5 text-[11px] leading-snug line-clamp-2 ${
+                              n.includes('left in') ? 'text-amber-300/90' : 'text-gray-500'}`}>{n}</span>
+                          ))}
                         </span>
                       );
                     })}

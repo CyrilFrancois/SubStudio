@@ -25,7 +25,8 @@ function Review() {
   const [error, setError] = useState<string | null>(null);
   const [edits, setEdits] = useState<Record<number, string>>({});
   const [selected, setSelected] = useState<number | null>(null);
-  const [onlyFlagged, setOnlyFlagged] = useState(false);
+  // Which lines the table shows: all, the flagged ones, or the ones the translator left in the source language.
+  const [show, setShow] = useState<'all' | 'flagged' | 'left'>('all');
   const [save, setSave] = useState<SaveState>({ state: 'idle' });
 
   const load = useCallback(async () => {
@@ -68,9 +69,16 @@ function Review() {
     return m;
   }, [list]);
   const flaggedLines = list?.cues.filter(c => (c.flags ?? []).length).length ?? 0;
-  const shown = list ? (onlyFlagged ? list.cues.filter(c => (c.flags ?? []).length || c.id in edits) : list.cues) : [];
+  const leftLines = list?.cues.filter(c => (c.flags ?? []).includes('untranslated')).length ?? 0;
+  // A line being edited stays in view even once it no longer matches the filter.
+  const shown = !list ? [] : show === 'all' ? list.cues
+    : list.cues.filter(c => c.id in edits || (show === 'left' ? (c.flags ?? []).includes('untranslated') : (c.flags ?? []).length));
   const current = list?.cues.find(c => c.id === selected) ?? null;
-  const sourceLabel = list?.from_language ? languageName(list.from_language) : null;
+  // The language it was translated from comes from the file's tag (survives a restart); the source LINES only live
+  // in the run kept in memory (workspace-6e). The column shows only when there are lines to show.
+  const fromName = list?.from_language ? languageName(list.from_language) : null;
+  const hasSource = !!list?.cues.some(c => c.source_text != null);
+  const sourceLabel = hasSource ? fromName : null;
 
   const doSave = async () => {
     if (!list) return;
@@ -104,7 +112,7 @@ function Review() {
             <h1 className="text-lg font-semibold text-white truncate" title={title}>{title || 'Review'}</h1>
             {list && (
               <p className="text-xs text-gray-500 mt-0.5">
-                {list.cues.length} lines · {list.origin}{sourceLabel ? ` from ${sourceLabel}` : ''}{list.reviewed ? ' · reviewed' : ''}
+                {list.cues.length} lines · {list.origin}{fromName ? ` from ${fromName}` : ''}{leftLines ? <span className="text-amber-300"> · {leftLines} left in {fromName ?? 'the source language'}</span> : null}{list.reviewed ? ' · reviewed' : ''}
                 {' · '}{flaggedLines ? `${flaggedLines} need a look` : 'nothing flagged'}
                 {FLAG_ORDER.filter(f => counts.get(f)).map(f => <span key={f}> · {flagCount(f, counts.get(f) ?? 0)}</span>)}
               </p>
@@ -130,15 +138,22 @@ function Review() {
                 </select>
               </label>
             )}
-            {list && <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
-              <input type="checkbox" checked={onlyFlagged} onChange={e => setOnlyFlagged(e.target.checked)} className="w-4 h-4 accent-indigo-600" />
-              <Filter size={13} aria-hidden /> Only lines that need a look
-            </label>}
+            {list && (
+              <label className="flex items-center gap-2 text-xs text-gray-400">
+                <Filter size={13} aria-hidden /> Show
+                <select value={show} onChange={e => setShow(e.target.value as typeof show)}
+                        className="bg-black/40 border border-white/10 rounded-md px-2 py-1.5 text-sm text-gray-200 outline-none focus:border-indigo-500">
+                  <option value="all">All lines ({list.cues.length})</option>
+                  <option value="flagged">Lines that need a look ({flaggedLines})</option>
+                  {leftLines > 0 && <option value="left">Lines left in {fromName ?? 'the source language'} ({leftLines})</option>}
+                </select>
+              </label>
+            )}
           </div>
         </div>
       </header>
 
-      {list && list.origin === 'translated' && !list.from_language && (
+      {list && list.origin === 'translated' && !hasSource && (
         // workspace-6e: the source lines live only in the run kept in memory; a restart drops them.
         <p role="status" className="mx-6 mt-3 text-xs text-gray-400">
           The lines this was translated from are not available any more (the backend restarted since the run), so only the subtitle is shown.
@@ -159,7 +174,7 @@ function Review() {
         <div className="flex-1 min-h-0 grid grid-cols-[1fr_22rem]">
           <div className="min-h-0 overflow-y-auto border-r border-white/10">
             {shown.length === 0
-              ? <p className="px-6 py-10 text-sm text-gray-400 flex items-center gap-2"><CheckCircle2 size={15} className="text-emerald-400" aria-hidden /> No line needs a look.</p>
+              ? <p className="px-6 py-10 text-sm text-gray-400 flex items-center gap-2"><CheckCircle2 size={15} className="text-emerald-400" aria-hidden /> {show === 'left' ? `No line left in ${fromName ?? 'the source language'}.` : 'No line needs a look.'}</p>
               : <CueTable cues={shown} edits={edits} selected={selected} onSelect={setSelected}
                           onEdit={onEdit}
                           sourceLabel={sourceLabel} />}
