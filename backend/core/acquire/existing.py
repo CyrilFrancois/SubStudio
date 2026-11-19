@@ -1,13 +1,14 @@
-# existing.py — what a video already carries: its subtitle tracks and language-named sidecars as ExistingSub, and its audio language. Exports: find_existing, audio_language.
+# existing.py — what a video already carries: its subtitle tracks and language-named sidecars as ExistingSub, and its audio language. Exports: find_existing, picked_sidecar, audio_language.
 import json
 import logging
 import os
 import re
 import subprocess
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from ..provenance import is_substudio_track
 from ..subtitle_processor import TEXT_SUBTITLE_CODECS
+from ..subtitles import Cue, detect_language, load_file, shift
 from .plan import normalize_language
 from .types import ExistingSub
 
@@ -57,6 +58,27 @@ def find_existing(video_path: str) -> List[ExistingSub]:
                 path = os.path.join(d, name)
                 found.append(ExistingSub(lang, "sidecar", path, marked=is_substudio_track(kind="sidecar", path=path)))
     return found
+
+
+def picked_sidecar(video_path: str, workflow_mode: str, selected: Optional[str],
+                   offset_s: float) -> Optional[Tuple[ExistingSub, List[Cue]]]:
+    """The sidecar the user chose (workflowMode srt/hybrid: his pick, else `{stem}.srt`), loaded and shifted by his
+    offset (seconds), as a trusted ExistingSub with its cues; None when there is none. An unreadable or empty one
+    raises: it is never silently replaced by another rung. Its language comes from its text."""
+    if workflow_mode not in ("srt", "hybrid"):
+        return None
+    candidates = ([selected] if selected else []) + [os.path.splitext(video_path)[0] + ".srt"]
+    found = next((c for c in candidates if os.path.isfile(c)), None)
+    if found is None:
+        return None
+    logger.info(f"🔍 Using the chosen subtitle {os.path.basename(found)}")
+    cues = load_file(found)
+    if offset_s:
+        cues = shift(cues, offset_s)
+    lang = detect_language(cues)
+    if lang is None:
+        logger.warning(f"The language of {os.path.basename(found)} could not be detected: it cannot be used")
+    return ExistingSub(lang, "sidecar", found, marked=True), cues
 
 
 def audio_language(video_path: str) -> Optional[str]:

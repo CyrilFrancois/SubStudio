@@ -133,3 +133,59 @@ def test_retry_and_cells_routes_refuse_a_video_never_processed():
         body = {"video": {"name": "x.mkv", "path": "/data/never.mkv"}, "language": "fr", "globalOptions": {}}
         assert client.post("/api/retry", json=body).status_code == 404
         assert client.get("/api/cells//data/never.mkv").status_code == 404
+
+
+def test_retry_is_refused_while_another_job_runs_or_when_the_source_is_gone(clip):
+    from fastapi.testclient import TestClient
+    with TestClient(main.app) as client:
+        orch = main.orchestrator
+        orch.translator = Tag(broken={"fr"})
+        orch.translator.get_context_profile = lambda name: ""
+        process(orch, clip, ("de", "fr"))
+        body = {"video": {"name": clip.name, "path": str(clip)}, "language": "fr", "globalOptions": {}}
+        orch.active_jobs.add("another video")
+        assert client.post("/api/retry", json=body).status_code == 409
+        orch.active_jobs.discard("another video")
+        moved = clip.with_suffix(".moved")
+        clip.rename(moved)
+        assert client.post("/api/retry", json=body).status_code == 409
+        moved.rename(clip)
+        assert client.get(f"/api/cells/{clip}").json()["cells"][1]["state"] == "failed"
+
+
+def test_an_abort_mid_cell_ends_it_failed_not_running():
+    from core.jobs import JobAborted, JobHandle
+    cues = [Cue(id=i + 1, start_ms=i * 1000, end_ms=i * 1000 + 900, text=t) for i, t in enumerate(ENGLISH)]
+    run = main.VideoRun(path="v", source=Source(cues=cues, rung=Rung.TRANSLATE, language="en",
+                                                context=TranslationContext()), cells={"de": Cell("de")})
+    handle = JobHandle("v")
+
+    class AbortsDuringFirstCall(Tag):
+        batch_size = 1
+        def translate(self, cues, target, context):
+            handle.abort()
+            return super().translate(cues, target, context)
+
+    orch = orchestrator(AbortsDuringFirstCall())
+    with pytest.raises(JobAborted):
+        asyncio.run(orch._run_cell(run, "de", handle, "[t]"))
+    assert (run.cells["de"].state, run.cells["de"].reason) == (CellState.FAILED, "cancelled by the user")
+
+
+def test_a_transcription_uses_the_language_whisper_heard(tmp_path):
+    # Two words are far too little for text detection; Whisper's own 0.97 decides: EN kept as « transcribed ».
+    from core.asr_result import AsrResult, AsrSegment, AsrWord
+    video = tmp_path / "short.mkv"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=10:duration=3",
+                    "-f", "lavfi", "-i", "sine=duration=3", "-c:v", "mpeg4", "-c:a", "aac", "-shortest", str(video)],
+                   check=True)
+    words = [AsrWord(0.5, 0.9, "Hello", 0.9), AsrWord(1.0, 1.4, "there.", 0.9)]
+    asr = AsrResult(model="fake", language="en", language_probability=0.97, duration=3.0, speech=[(0.5, 1.4)],
+                    segments=[AsrSegment(0.5, 1.4, "Hello there.", -0.2, 0.01, 1.1, words)])
+    orch = orchestrator(Tag())
+    orch.transcriber.transcribe = lambda **kw: asr
+    job = main.VideoJob(name=video.name, path=str(video), out=["en", "de"], workflowMode="whisper")
+    asyncio.run(orch.execute_pipeline(job, main.GlobalOptions(generateSRT=True, muxIntoMkv=False), 0, 1))
+    cells = {c["language"]: c for c in orch.runs[str(video)].to_json()}
+    assert cells["en"]["origin"] == "transcribed" and orch.translator.calls == ["de"]
+    assert cells["de"]["origin"] == "transcribed, translated from en"

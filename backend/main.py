@@ -16,10 +16,10 @@ from typing import Dict, List, Optional, Any, Set
 from core.scanner import VideoScanner
 from core.transcriber import VideoTranscriber
 from core.translator import GeminiTranslator
-from core.subtitles import TranslationContext, detect_language, load_file, parse, shift, to_srt, wrap_lines
+from core.subtitles import TranslationContext, to_srt, wrap_lines
 from core.cells import Cell, CellState, VideoRun
-from core.acquire import ExistingSub, plan
-from core.acquire.existing import audio_language, find_existing
+from core.acquire import plan
+from core.acquire.existing import audio_language, find_existing, picked_sidecar
 from core.acquire.plan import OV_TAGS
 from core.ladder import Ladder, LadderDeps
 from core.subtitle_processor import SubtitleProcessor
@@ -54,7 +54,7 @@ class VideoJob(BaseModel):
     stripExistingSubs: bool = False
 
 class GlobalOptions(BaseModel):
-    transcriptionEngine: str = "medium"
+    transcriptionEngine: str = "turbo"
     generateSRT: bool = True
     muxIntoMkv: bool = True
     cleanUp: bool = False
@@ -68,7 +68,7 @@ class ProcessRequest(BaseModel):
 class PipelineOrchestrator:
     def __init__(self):
         self.scanner = VideoScanner(base_path=MEDIA_ROOT)
-        self.transcriber = VideoTranscriber(model_size="medium")
+        self.transcriber = VideoTranscriber()
         self.translator = GeminiTranslator()
         self.muxer = VideoMuxer()
         self.processor = SubtitleProcessor()
@@ -119,11 +119,11 @@ class PipelineOrchestrator:
     def _ladder(self, run: VideoRun, video: "VideoJob", opts: "GlobalOptions", job, p: str, index: int, total: int,
                 preloaded: Optional[Dict[str, list]] = None) -> Ladder:
         def transcribe():
-            srt_text = self.transcriber.transcribe(
+            asr = self.transcriber.transcribe(
                 video_path=video.path, file_id=run.path, on_progress=event_manager.emit,
-                current_file=index + 1, total_files=total, model_size=opts.transcriptionEngine,
-                context_prompt=run.context.notes, job=job)
-            return parse(srt_text, "srt")
+                current_file=index + 1, total_files=total, model_size=opts.transcriptionEngine, job=job)
+            # Whisper hears the language; text detection only guesses it. Trusted when Whisper is sure.
+            return asr.to_cues(), (asr.language if asr.language_probability >= 0.9 else None)
 
         return Ladder(run, LadderDeps(
             translator=self.translator, transcribe=transcribe,
@@ -146,7 +146,15 @@ class PipelineOrchestrator:
 
         cell.state = CellState.RUNNING
         event_manager.emit_cells(run.path, run.to_json())
-        await ladder.fill(lang_code, on_batch=on_batch)
+        try:
+            await ladder.fill(lang_code, on_batch=on_batch)
+        except BaseException as e:
+            # A cell never stays « running »: an abort or a crash ends it failed, with its reason, then propagates.
+            cell.state = CellState.FAILED
+            cell.reason = "cancelled by the user" if isinstance(e, JobAborted) else f"unexpected error: {e}"
+            cell.cues = None
+            event_manager.emit_cells(run.path, run.to_json())
+            raise
         if cell.state == CellState.PASSED:
             cell.cues = wrap_lines(cell.cues, 50)
             logger.info(f"✅ {p} {cell.summary()}")
@@ -214,23 +222,6 @@ class PipelineOrchestrator:
             job_registry.release(fid)
             logging.getLogger().removeHandler(log_handler)
 
-    @staticmethod
-    def _picked_sidecar(video: "VideoJob"):
-        """The sidecar the user chose (workflowMode srt/hybrid), loaded and shifted by his offset, or None.
-        An unreadable or empty one raises: it is never silently replaced by another rung."""
-        if video.workflowMode not in ("srt", "hybrid"):
-            return None
-        candidates = ([Path(video.selectedSrtPath)] if video.selectedSrtPath else []) + [Path(video.path).with_suffix(".srt")]
-        found = next((c for c in candidates if c.is_file()), None)
-        if found is None:
-            return None
-        logger.info(f"🔍 Using the chosen subtitle {found.name}")
-        cues = load_file(found)
-        if video.syncOffset:
-            logger.info(f"⏱️ Adjusting timing by {video.syncOffset}s")
-            cues = shift(cues, video.syncOffset)
-        return str(found), cues
-
     async def execute_pipeline(self, video: VideoJob, opts: GlobalOptions, index: int, total: int):
         fid = video.path
         self.active_jobs.add(fid)
@@ -252,12 +243,11 @@ class PipelineOrchestrator:
             # choice), and the audio language that « OV » stands for.
             existing = await asyncio.to_thread(find_existing, video.path)
             preloaded: Dict[str, list] = {}
-            picked = await asyncio.to_thread(self._picked_sidecar, video)
+            picked = await asyncio.to_thread(picked_sidecar, video.path, video.workflowMode, video.selectedSrtPath,
+                                             video.syncOffset)
             if picked:
-                path, cues = picked
-                existing = [e for e in existing if e.ref != path] + [
-                    ExistingSub(detect_language(cues), "sidecar", path, marked=True)]
-                preloaded[path] = cues
+                existing = [e for e in existing if e.ref != picked[0].ref] + [picked[0]]
+                preloaded[picked[0].ref] = picked[1]
             original = await asyncio.to_thread(audio_language, video.path)
 
             # STEP 3: ONE PLAN AND ONE CELL PER LANGUAGE (D-0002) — each passes or fails alone, with its origin.
@@ -352,8 +342,12 @@ async def retry(request: RetryRequest):
     run = orchestrator.runs.get(fid)
     if run is None or request.language not in run.cells:
         raise HTTPException(status_code=404, detail="No earlier run of this video and language: process it first")
-    if fid in orchestrator.active_jobs:
-        raise HTTPException(status_code=409, detail="This video is being processed")
+    # One job at a time on this PC (D-0001: one heavy model), and a queued video counts as busy too.
+    if orchestrator.active_jobs or job_registry.active_ids():
+        raise HTTPException(status_code=409, detail="Another job is running: retry once it has finished")
+    if not Path(fid).is_file():
+        raise HTTPException(status_code=409, detail="The source video is no longer there (removed by cleanUp?)")
+    orchestrator.active_jobs.add(fid)  # claimed before returning: a second retry in the same instant gets 409
     task = asyncio.create_task(orchestrator.retry_cell(request.video, request.language, request.globalOptions))
     _jobs.add(task)
     task.add_done_callback(_jobs.discard)

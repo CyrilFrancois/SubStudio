@@ -58,6 +58,7 @@ _ECHO_MIN_WORDS = 3
 # Measured 2026-11-19 on 3,323 English cues of 6 Ghosts S05 episodes: 89 % have 3+ words, 0.2 % carry ♪.
 # Hypothesis, to set once the bench has human FR/EN pairs: a real translation leaves far under 1 in 10 unchanged.
 MAX_ECHO_SHARE = 0.10
+MIN_ECHO_SENTENCES = 10
 
 
 def _norm(text: str) -> str:
@@ -178,7 +179,8 @@ def translate_cues(
     if check_echo:
         long_lines = [c for c in cues if _is_sentence(c.text)]
         echoed = [c.id for c in long_lines if _is_echo(c.text, texts[c.id])]
-        if long_lines and len(echoed) > MAX_ECHO_SHARE * len(long_lines):
+        # Under MIN_ECHO_SENTENCES there is too little text to tell an echo from lines that stay the same.
+        if len(long_lines) >= MIN_ECHO_SENTENCES and len(echoed) > MAX_ECHO_SHARE * len(long_lines):
             raise TranslationFailed(f"{target}: {len(echoed)} of {len(long_lines)} sentences came back in the source "
                                     f"language (first ids {echoed[:5]})")
 

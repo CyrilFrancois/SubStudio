@@ -35,7 +35,7 @@ def work_dir_for(video_path: str) -> str:
 @dataclass
 class LadderDeps:
     translator: Translator
-    transcribe: Callable[[], List[Cue]]               # blocking: ASR of the whole video
+    transcribe: Callable[[], Tuple[List[Cue], Optional[str]]]  # blocking: ASR → (cues, language Whisper is sure of)
     load_embedded: Callable[[int], List[Cue]]         # blocking: one embedded text track (index among subtitles)
     fetch: Callable[..., FetchResult] = fetch         # blocking: (video_path, languages, work_dir)
     downloads_enabled: bool = True
@@ -163,10 +163,10 @@ class Ladder:
     async def asr(self) -> Source:
         if self.run.asr is None:
             self.deps.progress("processing", 15, "Transcribing with Whisper...")
-            cues = await asyncio.to_thread(self.deps.transcribe)
+            cues, spoken = await asyncio.to_thread(self.deps.transcribe)
             if not cues:
                 raise RuntimeError("no speech detected")
-            lang = detect_language(cues)
+            lang = spoken or detect_language(cues)
             self.run.asr = Source(cues=cues, rung=Rung.ASR, language=lang,
                                   context=replace(self.run.context, source_lang=lang, source_is_asr=True))
         return self.run.asr

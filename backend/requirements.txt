@@ -6,12 +6,13 @@ pydantic
 pydantic-settings
 
 # AI & Transcription
-# Pinning to 1.0.3 for stability with the int8 compute type
-faster-whisper==1.0.3
+# 1.1.0 added the "turbo" model; 1.2.1 is the version benchmarked on this PC (bench/asr_bench.py).
+# No torch: faster-whisper runs on CTranslate2 and its Silero VAD on onnxruntime.
+faster-whisper==1.2.1
+# PyAV 19 removed av.open(metadata_errors=...), which faster-whisper 1.2.1 passes on every decode: with av 19
+# every transcription fails with a TypeError (measured 2026-11-19: 19.0.2 fails, 18.1.0 works).
+av<19
 requests
-# torch is a dependency for some whisper internals, 
-# but we only need the base package
-torch --index-url https://download.pytorch.org/whl/cpu
 
 # Media Processing
 langdetect
