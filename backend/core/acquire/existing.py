@@ -1,11 +1,13 @@
-# existing.py — what a video already carries: its subtitle tracks and language-named sidecars as ExistingSub, and its audio language. Exports: find_existing, picked_sidecar, audio_language.
+# existing.py — what a video already carries: its subtitle tracks and language-named sidecars as ExistingSub, and its audio language. Exports: find_existing, label_by_text, picked_sidecar, audio_language.
 import json
 import logging
 import os
 import re
 import subprocess
-from typing import List, Optional, Tuple
+from dataclasses import replace
+from typing import Callable, Dict, List, Optional, Tuple
 
+from ..jobs import JobAborted
 from ..provenance import is_substudio_track
 from ..subtitle_processor import TEXT_SUBTITLE_CODECS
 from ..subtitles import Cue, detect_language, load_file, shift
@@ -58,6 +60,34 @@ def find_existing(video_path: str) -> List[ExistingSub]:
                 path = os.path.join(d, name)
                 found.append(ExistingSub(lang, "sidecar", path, marked=is_substudio_track(kind="sidecar", path=path)))
     return found
+
+
+def label_by_text(existing: List[ExistingSub], load: Callable[[int], List[Cue]]
+                  ) -> Tuple[List[ExistingSub], Dict[str, List[Cue]]]:
+    """Gives an untagged embedded TEXT track the language of its own text, so it is a rung-1 candidate like any other
+    (Ghosts S05: one track has no language tag; tags and titles are not to be relied on). Returns the relabelled list
+    and the cues already loaded (ExistingSub.ref → cues), so the ladder does not extract them twice. A track that
+    cannot be read or whose language cannot be told stays out of the plan, with a log line."""
+    out, loaded = [], {}
+    for s in existing:
+        if s.language or s.kind != "embedded" or not s.text:
+            out.append(s)
+            continue
+        try:
+            cues = load(int(s.ref))
+        except JobAborted:
+            raise
+        except Exception as e:
+            logger.warning(f"Untagged subtitle track {s.ref} could not be read: {str(e)[:120]}")
+            continue
+        lang = detect_language(cues)
+        if lang is None:
+            logger.warning(f"Untagged subtitle track {s.ref}: its language could not be told from its text")
+            continue
+        logger.info(f"Untagged subtitle track {s.ref} reads as {lang}")
+        out.append(replace(s, language=lang))
+        loaded[s.ref] = cues
+    return out, loaded
 
 
 def picked_sidecar(video_path: str, workflow_mode: str, selected: Optional[str],

@@ -74,7 +74,7 @@ class Plan(unittest.TestCase):
     def test_existing_is_evaluated_then_falls_through(self):
         # Rung 1 ends at the gate: a subtitle that fails it must leave the rest of the ladder in place.
         (p,) = plan(["fr"], [ExistingSub("fr", "embedded", "2")])
-        self.assertEqual(_rungs(p), [Rung.EXISTING, Rung.DOWNLOAD, Rung.ASR])
+        self.assertEqual(_rungs(p), [Rung.EXISTING, Rung.DOWNLOAD, Rung.TRANSLATE, Rung.ASR])
 
     def test_other_language_text_track_becomes_a_source_only_plan(self):
         plans = plan(["fr"], [ExistingSub("de", "embedded", "2"), ExistingSub("it", "embedded", "4", text=False)],
@@ -85,7 +85,7 @@ class Plan(unittest.TestCase):
 
     def test_no_downloads_means_no_download_rungs(self):
         (p,) = plan(["fr"], [], downloads_enabled=False)
-        self.assertEqual(_rungs(p), [Rung.ASR])
+        self.assertEqual(_rungs(p), [Rung.TRANSLATE, Rung.ASR])
 
     def test_duplicates_collapse_and_unknown_raises(self):
         self.assertEqual(len(plan(["fr", "fre", "fra"], [])), 1)

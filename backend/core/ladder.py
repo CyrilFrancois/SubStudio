@@ -25,6 +25,8 @@ from .subtitles import Cue, Translator, detect_language, load_file
 
 logger = logging.getLogger("SubStudio.Ladder")
 
+_UNLABELLED = "und"  # run.human key of a human source whose language is unknown
+
 
 def work_dir_for(video_path: str) -> str:
     """The per-video work folder: outside the library, so nothing is ever written beside the source."""
@@ -41,6 +43,9 @@ class LadderDeps:
     downloads_enabled: bool = True
     count_existing: bool = False
     preloaded: Dict[str, List[Cue]] = field(default_factory=dict)  # ExistingSub.ref → cues (the user's own pick)
+    # The user's pick when its language cannot be detected (too little text): no rung 1 for it, but still a human
+    # source to translate from, as the user asked.
+    unlabelled: Optional[List[Cue]] = None
     check_abort: Callable[[], None] = lambda: None
     progress: Callable[[str, int, str], None] = lambda status, percent, message: None
 
@@ -80,6 +85,9 @@ class Ladder:
                 to_download.append(lang)
         if to_download and self.deps.downloads_enabled:
             await self._download(to_download)
+        if self.deps.unlabelled:
+            self.run.human[_UNLABELLED] = Source(cues=self.deps.unlabelled, rung=Rung.EXISTING, language=None,
+                                                 context=replace(self.run.context, source_is_asr=False))
 
     async def _existing(self, sub: ExistingSub) -> Tuple[Optional[List[Cue]], str]:
         if not sub.marked and not self.deps.count_existing:
@@ -133,7 +141,9 @@ class Ladder:
         cell, plan = self.run.cells[lang], self.run.plans[lang]
         for step in plan.steps:
             if step.rung == Rung.TRANSLATE:
+                # The plan's order first (OV first); then any other human source, e.g. the user's unlabelled pick.
                 sources = [l for l in step.from_languages if l in self.run.human]
+                sources += [l for l in self.run.human if l not in sources and l != lang]
                 if not sources:
                     self._note(lang, "translate: no good subtitle in another language")
                     continue

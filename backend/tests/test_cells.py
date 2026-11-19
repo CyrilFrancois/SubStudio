@@ -156,8 +156,11 @@ def test_retry_is_refused_while_another_job_runs_or_when_the_source_is_gone(clip
 def test_an_abort_mid_cell_ends_it_failed_not_running():
     from core.jobs import JobAborted, JobHandle
     cues = [Cue(id=i + 1, start_ms=i * 1000, end_ms=i * 1000 + 900, text=t) for i, t in enumerate(ENGLISH)]
-    run = main.VideoRun(path="v", source=Source(cues=cues, rung=Rung.TRANSLATE, language="en",
-                                                context=TranslationContext()), cells={"de": Cell("de")})
+    from core.acquire.types import LanguagePlan, Step
+    from core.ladder import Ladder, LadderDeps
+    run = main.VideoRun(path="v", cells={"de": Cell("de")},
+                        plans={"de": LanguagePlan("de", [Step(Rung.TRANSLATE, "de", from_languages=("en",))])},
+                        human={"en": Source(cues=cues, rung=Rung.EXISTING, language="en", context=TranslationContext())})
     handle = JobHandle("v")
 
     class AbortsDuringFirstCall(Tag):
@@ -167,8 +170,10 @@ def test_an_abort_mid_cell_ends_it_failed_not_running():
             return super().translate(cues, target, context)
 
     orch = orchestrator(AbortsDuringFirstCall())
+    ladder = Ladder(run, LadderDeps(translator=orch.translator, transcribe=lambda: ([], None),
+                                    load_embedded=lambda i: [], check_abort=handle.raise_if_aborted))
     with pytest.raises(JobAborted):
-        asyncio.run(orch._run_cell(run, "de", handle, "[t]"))
+        asyncio.run(orch._run_cell(run, ladder, "de", handle, "[t]"))
     assert (run.cells["de"].state, run.cells["de"].reason) == (CellState.FAILED, "cancelled by the user")
 
 

@@ -19,7 +19,7 @@ from core.translator import GeminiTranslator
 from core.subtitles import TranslationContext, to_srt, wrap_lines
 from core.cells import Cell, CellState, VideoRun
 from core.acquire import plan
-from core.acquire.existing import audio_language, find_existing, picked_sidecar
+from core.acquire.existing import audio_language, find_existing, label_by_text, picked_sidecar
 from core.acquire.plan import OV_TAGS
 from core.ladder import Ladder, LadderDeps
 from core.subtitle_processor import SubtitleProcessor
@@ -117,7 +117,7 @@ class PipelineOrchestrator:
             event_manager.emit("system_events", "batch_done", 100, "All tasks completed")
 
     def _ladder(self, run: VideoRun, video: "VideoJob", opts: "GlobalOptions", job, p: str, index: int, total: int,
-                preloaded: Optional[Dict[str, list]] = None) -> Ladder:
+                preloaded: Optional[Dict[str, list]] = None, unlabelled: Optional[list] = None) -> Ladder:
         def transcribe():
             asr = self.transcriber.transcribe(
                 video_path=video.path, file_id=run.path, on_progress=event_manager.emit,
@@ -129,7 +129,7 @@ class PipelineOrchestrator:
             translator=self.translator, transcribe=transcribe,
             load_embedded=lambda i: self.processor.extract_embedded_subs(video.path, i, job=job),
             downloads_enabled=self.downloads_enabled, count_existing=self.count_existing,
-            preloaded=preloaded or {}, check_abort=job.raise_if_aborted,
+            preloaded=preloaded or {}, unlabelled=unlabelled, check_abort=job.raise_if_aborted,
             progress=lambda status, pct, msg: event_manager.emit(run.path, status, pct, f"{p} {msg}")))
 
     async def _run_cell(self, run: VideoRun, ladder: Ladder, lang_code: str, job, p: str):
@@ -241,22 +241,26 @@ class PipelineOrchestrator:
 
             # STEP 2: WHAT IS ALREADY THERE — tracks and sidecars, plus the sidecar the user picked (trusted: his
             # choice), and the audio language that « OV » stands for.
-            existing = await asyncio.to_thread(find_existing, video.path)
-            preloaded: Dict[str, list] = {}
+            existing, preloaded = await asyncio.to_thread(
+                label_by_text, await asyncio.to_thread(find_existing, video.path),
+                lambda i: self.processor.extract_embedded_subs(video.path, i, job=job))
             picked = await asyncio.to_thread(picked_sidecar, video.path, video.workflowMode, video.selectedSrtPath,
                                              video.syncOffset)
-            if picked:
+            unlabelled = None
+            if picked and picked[0].language:
                 existing = [e for e in existing if e.ref != picked[0].ref] + [picked[0]]
                 preloaded[picked[0].ref] = picked[1]
+            elif picked:
+                unlabelled = picked[1]
             original = await asyncio.to_thread(audio_language, video.path)
 
             # STEP 3: ONE PLAN AND ONE CELL PER LANGUAGE (D-0002) — each passes or fails alone, with its origin.
             run = VideoRun(path=fid, cells={}, context=TranslationContext(title=video.name, notes=context))
-            ladder = self._ladder(run, video, opts, job, p, index, total, preloaded)
+            ladder = self._ladder(run, video, opts, job, p, index, total, preloaded, unlabelled)
             if original is None and any(o.strip().lower() in OV_TAGS for o in video.out):
-                original = (await ladder.asr()).language  # untagged audio: OV is what the transcript is in
-                if original is None:
-                    raise RuntimeError("The audio language could not be detected, so « OV » cannot be planned")
+                # Untagged audio: Whisper identifies the language on a sample, without a full transcription.
+                original, prob = await asyncio.to_thread(self.transcriber.detect_video_language, video.path, job)
+                logger.info(f"{p} OV detected as {original} (probability {prob:.2f})")
             plans = plan(video.out, existing, original, downloads_enabled=self.downloads_enabled)
             run.plans = {lp.language: lp for lp in plans}
             run.cells = {lp.language: Cell(lp.language) for lp in plans if not lp.source_only}
@@ -322,6 +326,9 @@ async def scan(target_path: str = Query(MEDIA_ROOT)):
 
 @app.post("/api/process")
 async def process(request: ProcessRequest):
+    # One job at a time on this PC (D-0001: one heavy model), and a queued video counts as busy too.
+    if orchestrator.active_jobs or job_registry.active_ids():
+        raise HTTPException(status_code=409, detail="Another job is running: start again once it has finished")
     # NOT BackgroundTasks: uvicorn withholds the response until those finish, which would hang
     # this POST for the whole batch. create_task returns to the client immediately.
     task = asyncio.create_task(orchestrator.run_batch(request.videos, request.globalOptions))
