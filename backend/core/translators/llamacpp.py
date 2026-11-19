@@ -24,6 +24,24 @@ logger = logging.getLogger("SubStudio.LocalTranslator")
 
 _HOME = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "SubStudio"
 _LINE = re.compile(r"^\s*\[?(\d+)\]?\s*[|:.)\]]\s*(.*)$")
+_DASH = re.compile(r"^\s*[-–—]\s*")
+_SPEAKER_SPLIT = re.compile(r"\s+[-–—]\s+")
+
+
+def _dialogue_lines(text: str) -> int:
+    """Number of speakers when a cue is a dialogue (every line starts with a dash), else 0."""
+    lines = [l for l in text.splitlines() if l.strip()]
+    return len(lines) if len(lines) >= 2 and all(_DASH.match(l) for l in lines) else 0
+
+
+def _restore_dialogue(text: str, speakers: int) -> str:
+    # A cue goes to the model as one line, so « - Yeah I saw.\n- Did you? » comes back as « Oui. – Vous ? »
+    # (measured live 2026-11-19). The layout is computable from the source: one dashed line per speaker.
+    # When the dashes do not split it into exactly that many parts, the text is left as the model wrote it.
+    if not speakers:
+        return text
+    parts = _SPEAKER_SPLIT.split(_DASH.sub("", text))
+    return "\n".join(f"- {p.strip()}" for p in parts) if len(parts) == speakers else text
 
 
 class LlamaCppTranslator:
@@ -73,7 +91,9 @@ class LlamaCppTranslator:
         if data.get("stop_type") == "limit":
             # Cut at the token limit: a wrong answer, so translate_cues splits the batch instead of resending it.
             raise BatchMismatch("reply cut at the output token limit (stop_type=limit)")
-        return self._parse(data.get("content", ""))
+        speakers = {c["id"]: _dialogue_lines(c["text"]) for c in cues}
+        return [{"id": t["id"], "text": _restore_dialogue(t["text"], speakers.get(t["id"], 0))}
+                for t in self._parse(data.get("content", ""))]
 
     def _render(self, text: str, source: str, target: str) -> str:
         if self._template is None:

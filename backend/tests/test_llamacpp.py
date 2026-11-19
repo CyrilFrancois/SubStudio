@@ -85,6 +85,22 @@ def test_a_dropped_line_is_a_wrong_answer_and_the_batch_is_split():
     assert len(fake.prompts) > 2
 
 
+@pytest.mark.parametrize("reply, expected", [
+    ("Oui, je l'ai vu. – Vous aussi ?", "- Oui, je l'ai vu.\n- Vous aussi ?"),   # the live answer of 2026-11-19
+    ("- Oui. - Vraiment ?", "- Oui.\n- Vraiment ?"),
+    ("Oui, je l'ai vu, vous aussi ?", "Oui, je l'ai vu, vous aussi ?"),         # no dash to split on: left as is
+])
+def test_a_two_speaker_cue_gets_one_dashed_line_per_speaker_back(reply, expected):
+    t, _ = translator(lambda p: (f"5|{reply}", "eos"))
+    out = t.translate([{"id": 5, "text": "- Yeah I saw.\n- Did you?"}], "fr", CTX)
+    assert out == [{"id": 5, "text": expected}]
+
+
+def test_a_dash_inside_one_speakers_line_is_left_alone():
+    t, _ = translator(lambda p: ("5|Je suis - enfin - là.", "eos"))
+    assert t.translate([{"id": 5, "text": "I'm - finally - here."}], "fr", CTX)[0]["text"] == "Je suis - enfin - là."
+
+
 def test_reply_cut_at_the_token_limit_is_a_wrong_answer():
     t, _ = translator(lambda p: ("1|half", "limit"))
     with pytest.raises(BatchMismatch, match="token limit"):

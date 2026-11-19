@@ -60,6 +60,12 @@ Why not the others:
 
 ## Consequences
 
+- **Live check on the shipped path (2026-11-19, 10:55 UTC):** `translate_cues` → `LlamaCppTranslator`, which
+  started its own server, rendered the prompt from `/props` and translated 30 cues in 166 s (5.5 s/cue, as on the
+  bench) with every timing intact; after `unload()` no `llama-server.exe` was left. It showed one defect the
+  bench could not: a two-speaker cue came back on one line (« Oui, je l'ai vu. – Vous aussi ? »); the dashed
+  line per speaker is now restored in Python from the source cue's layout.
+
 - At 5.5 s per cue on a busy PC, a 45-minute episode (~700 cues) takes **about 1 hour per language**: an overnight
   batch, not an interactive one. A quiet-machine measurement is owed before quoting a time to Cyril.
 - The model is loaded only during a video's translation and unloaded before the next transcription (`unload()`).
