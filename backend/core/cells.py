@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Dict, List, Optional
 
-from .acquire.types import Rung
+from .acquire.types import LanguagePlan, Rung
 from .subtitles import Cue, TranslationContext, TranslationFailed, Translator, translate_cues
 
 
@@ -31,6 +31,17 @@ class Origin:
     """Where a passed cell's subtitle came from, in the words of doc/user-process.md §3."""
     rung: Rung
     from_language: Optional[str] = None  # the source language a translation started from, when known
+
+    def kind(self) -> str:
+        """The origin as one of provenance.ORIGINS: a transcript translated into another language is « translated »
+        (from_language says from what), a transcript kept in its own language is « transcribed »."""
+        if self.rung == Rung.EXISTING:
+            return "kept"
+        if self.rung == Rung.DOWNLOAD:
+            return "downloaded"
+        if self.rung == Rung.ASR and self.from_language is None:
+            return "transcribed"
+        return "translated"
 
     def label(self) -> str:
         if self.rung == Rung.EXISTING:
@@ -59,11 +70,18 @@ class Cell:
     origin: Optional[Origin] = None
     reason: str = ""                                        # one sentence, only when FAILED
     cues: Optional[List[Cue]] = field(default=None, repr=False)
+    # One sentence per rung that was tried and fell through, in order (« existing: ignored: en embedded »), so a
+    # cell that passed at rung 3 still says why rungs 1–2 did not.
+    attempts: List[str] = field(default_factory=list)
 
     def to_json(self) -> dict:
+        o = self.origin
         return {"language": self.language, "state": self.state.value,
-                "origin": self.origin.label() if self.origin else None,
-                "rung": self.origin.rung.value if self.origin else None, "reason": self.reason}
+                "origin": o.kind() if o else None,                 # one of provenance.ORIGINS, for the Library
+                "from_language": o.from_language if o else None,
+                "origin_label": o.label() if o else None,          # the sentence shown to a person
+                "rung": o.rung.value if o else None, "reason": self.reason,
+                "attempts": list(self.attempts)}
 
     def summary(self) -> str:
         if self.state == CellState.PASSED:
@@ -75,10 +93,13 @@ class Cell:
 
 @dataclass
 class VideoRun:
-    """Everything one video's cells need, kept in memory so one cell can be retried without redoing the source."""
+    """Everything one video's cells need, kept in memory so one cell can be retried without redoing its sources."""
     path: str
-    source: Source
     cells: Dict[str, Cell]
+    plans: Dict[str, LanguagePlan] = field(default_factory=dict)  # every plan, source-only ones included
+    human: Dict[str, Source] = field(default_factory=dict)        # language → a human subtitle that passed rung 1–2
+    asr: Optional[Source] = None                                  # the transcription, made at most once per run
+    context: TranslationContext = field(default_factory=TranslationContext)
 
     def passed(self) -> Dict[str, List[Cue]]:
         return {lang: c.cues for lang, c in self.cells.items() if c.state == CellState.PASSED}

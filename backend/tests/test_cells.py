@@ -79,8 +79,10 @@ def test_each_language_gets_its_own_verdict_and_origin(clip):
     finally:
         restore()
     cells = {c["language"]: c for c in orch.runs[str(clip)].to_json()}
-    assert cells["en"] == {"language": "en", "state": "passed", "origin": "kept", "rung": "existing", "reason": ""}
-    assert cells["de"]["state"] == "passed" and cells["de"]["origin"] == "translated from en"
+    assert cells["en"] == {"language": "en", "state": "passed", "origin": "kept", "from_language": None,
+                           "origin_label": "kept", "rung": "existing", "reason": "", "attempts": []}
+    assert cells["de"]["state"] == "passed" and cells["de"]["origin_label"] == "translated from en"
+    assert (cells["de"]["origin"], cells["de"]["from_language"]) == ("translated", "en")
     assert cells["fr"]["state"] == "failed" and cells["fr"]["reason"].startswith("fr: tag cannot translate cue")
     assert orch.translator.calls.count("en") == 0          # already English: kept, never sent to a model
     assert [c["state"] for c in seen[0]] == ["pending"] * 3 and seen[-1] == list(cells.values())
@@ -155,8 +157,11 @@ def test_retry_is_refused_while_another_job_runs_or_when_the_source_is_gone(clip
 def test_an_abort_mid_cell_ends_it_failed_not_running():
     from core.jobs import JobAborted, JobHandle
     cues = [Cue(id=i + 1, start_ms=i * 1000, end_ms=i * 1000 + 900, text=t) for i, t in enumerate(ENGLISH)]
-    run = main.VideoRun(path="v", source=Source(cues=cues, rung=Rung.TRANSLATE, language="en",
-                                                context=TranslationContext()), cells={"de": Cell("de")})
+    from core.acquire.types import LanguagePlan, Step
+    from core.ladder import Ladder, LadderDeps
+    run = main.VideoRun(path="v", cells={"de": Cell("de")},
+                        plans={"de": LanguagePlan("de", [Step(Rung.TRANSLATE, "de", from_languages=("en",))])},
+                        human={"en": Source(cues=cues, rung=Rung.EXISTING, language="en", context=TranslationContext())})
     handle = JobHandle("v")
 
     class AbortsDuringFirstCall(Tag):
@@ -166,8 +171,10 @@ def test_an_abort_mid_cell_ends_it_failed_not_running():
             return super().translate(cues, target, context)
 
     orch = orchestrator(AbortsDuringFirstCall())
+    ladder = Ladder(run, LadderDeps(translator=orch.translator, transcribe=lambda: ([], None),
+                                    load_embedded=lambda i: [], check_abort=handle.raise_if_aborted))
     with pytest.raises(JobAborted):
-        asyncio.run(orch._run_cell(run, "de", handle, "[t]"))
+        asyncio.run(orch._run_cell(run, ladder, "de", handle, "[t]"))
     assert (run.cells["de"].state, run.cells["de"].reason) == (CellState.FAILED, "cancelled by the user")
 
 
@@ -187,4 +194,5 @@ def test_a_transcription_uses_the_language_whisper_heard(tmp_path):
     asyncio.run(orch.execute_pipeline(job, main.GlobalOptions(generateSRT=True, muxIntoMkv=False), 0, 1))
     cells = {c["language"]: c for c in orch.runs[str(video)].to_json()}
     assert cells["en"]["origin"] == "transcribed" and orch.translator.calls == ["de"]
-    assert cells["de"]["origin"] == "transcribed, translated from en"
+    assert cells["de"]["origin_label"] == "transcribed, translated from en"
+    assert (cells["en"]["origin"], cells["de"]["origin"], cells["de"]["from_language"]) == ("transcribed", "translated", "en")

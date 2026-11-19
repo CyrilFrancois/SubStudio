@@ -87,9 +87,9 @@ def plan(wanted: Iterable[str], existing: Iterable[ExistingSub], original_langua
         if downloads_enabled and (not source_only or lang == original):
             steps.append(Step(Rung.DOWNLOAD, lang))
         if not source_only:
-            froms = tuple(l for l in ordered if l != lang)
-            if froms:
-                steps.append(Step(Rung.TRANSLATE, lang, from_languages=froms))
+            # Always present, even with no language to name: a human source can appear only at run time (the user's
+            # pick whose language could not be told, a download), and rung 4 is only for « no good subtitle anywhere ».
+            steps.append(Step(Rung.TRANSLATE, lang, from_languages=tuple(l for l in ordered if l != lang)))
             steps.append(Step(Rung.ASR, lang))
         if steps:
             plans.append(LanguagePlan(lang, steps, is_ov=lang == original, source_only=source_only))
