@@ -13,7 +13,7 @@ from typing import List, Optional
 
 from ..subtitles import Cue, TranslationContext
 from .guess import guess_media
-from .names import proper_nouns
+from .names import NOT_NAMES, QUOTES, proper_nouns
 from .tvmaze import TVMAZE_ATTRIBUTION, LookupFailed, TvmazeClient
 
 logger = logging.getLogger("SubStudio.Context")
@@ -26,20 +26,14 @@ def state_dir() -> Path:
     return Path(STATE_DIR) / "context"
 
 
-# A title is translated (« Captain » → « Capitaine »), so it never joins the names to keep.
-_TITLES = {"captain", "capt", "doctor", "dr", "mr", "mrs", "ms", "miss", "sir", "lady", "lord", "madame",
-           "mister", "father", "sister", "brother", "uncle", "aunt", "officer", "detective", "agent", "general",
-           "colonel", "major", "sergeant", "lieutenant", "professor", "judge", "king", "queen", "prince", "princess"}
-
-
 def _name_parts(characters: List[str]) -> List[str]:
     """« Captain Isaac Higgintoot » → « Isaac Higgintoot », « Isaac », « Higgintoot »; « Henrietta "Hetty"
-    Woodstone » also gives « Hetty »: dialogue uses any of them."""
+    Woodstone » also gives « Hetty »: dialogue uses any of them. Titles and articles never join (« The Doctor »)."""
     out: List[str] = []
     for full in characters:
-        words = [w for w in full.split() if w.strip('"“”«»()\'.,').casefold() not in _TITLES]
-        nickname = [w for w in words if w[:1] in '"“«(']  # « "Hetty" » is said alone, never inside the full name
-        parts = [w.strip('"“”«»()\'.,') for w in words]
+        words = [w for w in full.split() if w.strip(QUOTES).casefold() not in NOT_NAMES]
+        nickname = [w for w in words if w[:1] in "\"“«("]  # « "Hetty" » is said alone, never inside the full name
+        parts = [w.strip(QUOTES) for w in words]
         proper = " ".join(w.strip(".,") for w in words if w not in nickname)
         for term in [proper] + [p for p in parts if len(p) >= 3 and p[0].isupper()]:
             if term and term not in out:
@@ -47,11 +41,12 @@ def _name_parts(characters: List[str]) -> List[str]:
     return out
 
 
-def _notes(series: str, season, episode, episode_title: str, summary: str, characters: List[str]) -> str:
+def _notes(kind: str, series: str, season, episode, episode_title: str, summary: str,
+           characters: List[str]) -> str:
     lines = []
     if series:
-        lines.append(f"Series: {series}.")
-    if season is not None and episode is not None:
+        lines.append(f"{'Film' if kind == 'movie' else 'Series'}: {series}.")
+    if kind == "episode" and season is not None and episode is not None:
         lines.append(f"Season {season}, episode {episode}" + (f": « {episode_title} »." if episode_title else "."))
     if summary:
         lines.append(f"Episode summary: {summary}")
@@ -62,18 +57,29 @@ def _notes(series: str, season, episode, episode_title: str, summary: str, chara
 
 def get_context(video_path: str, cues: Optional[List[Cue]] = None,
                 client: Optional[TvmazeClient] = None) -> TranslationContext:
-    """Every fact a translator may use for this video, each one looked up or computed, with what is missing."""
+    """Every fact a translator may use for this video, each one looked up or computed, with what is missing.
+    Never raises: whatever goes wrong becomes the `missing` sentence of a context holding what is known."""
+    try:
+        return _build(video_path, cues, client)
+    except Exception as e:  # the last net: each known failure is already a reason inside _build
+        logger.error(f"Context for {Path(video_path).name} could not be built: {type(e).__name__}: {e}")
+        return TranslationContext(title=Path(video_path).stem,
+                                  missing=f"the context could not be built ({type(e).__name__}): none is used")
+
+
+def _build(video_path: str, cues: Optional[List[Cue]], client: Optional[TvmazeClient]) -> TranslationContext:
     media = guess_media(video_path)
     glossary_from_cues = proper_nouns(cues or [])
-    series = media.label() if media.kind != "episode" else (f"{media.title} ({media.year})" if media.year
-                                                           else media.title)
+    series = f"{media.title} ({media.year})" if media.title and media.year else media.title
     episode_title = summary = attribution = ""
     characters: List[str] = []
     missing: List[str] = []
 
-    if media.kind == "episode" and media.title:
-        client = client or TvmazeClient(state_dir())
+    if not media.title:
+        missing.append("the filename gives no title to look up")
+    elif media.kind == "episode":
         try:
+            client = client or TvmazeClient(state_dir())
             facts, why = client.series(media.title, media.year)
             if facts is None:
                 missing.append(why)
@@ -90,7 +96,7 @@ def get_context(video_path: str, cues: Optional[List[Cue]] = None,
                     else:
                         episode_title, summary = ep["name"], ep["summary"]
                         if not summary:
-                            missing.append("TVmaze has no summary for this episode")
+                            missing.append("TVmaze has no summary for this episode yet")
         except LookupFailed as e:
             missing.append(f"{e}: only the filename's facts are known")
             logger.warning(f"Context lookup failed for {Path(video_path).name}: {e}")
@@ -110,7 +116,7 @@ def get_context(video_path: str, cues: Optional[List[Cue]] = None,
         title = f"{series} S{media.season:02}E{media.episode:02}"
     return TranslationContext(
         title=title,
-        notes=_notes(series, media.season, media.episode, episode_title, summary, characters),
+        notes=_notes(media.kind, series, media.season, media.episode, episode_title, summary, characters),
         glossary=tuple(glossary),
         series=series if media.kind == "episode" else "",
         season=media.season, episode=media.episode, episode_title=episode_title, summary=summary,

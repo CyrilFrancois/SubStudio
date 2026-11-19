@@ -33,6 +33,9 @@ def guess_media(video_path: str) -> MediaGuess:
     from guessit import guessit
     g = guessit(Path(video_path).name)
     kind = g.get("type") if g.get("type") in ("episode", "movie") else "unknown"
-    title = str(g.get("title") or "").strip()
+    title = g.get("title") or ""
+    if isinstance(title, list):  # guessit lists the candidates when unsure: the first one names the file
+        title = title[0] if title else ""
+    title = str(title).strip()
     return MediaGuess(kind=kind, title=title, year=_single(g.get("year")),
                       season=_single(g.get("season")), episode=_single(g.get("episode")))

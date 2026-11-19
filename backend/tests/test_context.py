@@ -86,7 +86,8 @@ def test_the_cache_answers_the_second_time_without_a_call(tmp_path):
     calls = []
     get_context(EPISODE, client=client(tmp_path, calls))
     assert len(calls) == 3
-    cached = json.loads((tmp_path / "tvmaze" / "ghosts-2021.json").read_text(encoding="utf-8"))
+    (cache_file,) = (tmp_path / "tvmaze").glob("*.json")
+    cached = json.loads(cache_file.read_text(encoding="utf-8"))
     assert cached["show_id"] == 46573 and cached["episodes"]["5x1"]["name"] == "Soul Custody"
     again = []
     assert get_context(EPISODE, client=client(tmp_path, again)).episode_title == "Soul Custody"
@@ -120,9 +121,14 @@ def test_an_unknown_episode_keeps_the_series_facts(tmp_path):
 
 
 def test_a_corrupt_cache_file_is_ignored_and_rebuilt(tmp_path):
-    (tmp_path / "tvmaze").mkdir()
-    (tmp_path / "tvmaze" / "ghosts-2021.json").write_text("{not json", encoding="utf-8")
-    assert get_context(EPISODE, client=client(tmp_path, [])).episode_title == "Soul Custody"
+    c = client(tmp_path, [])
+    path = c._cache_path("Ghosts", 2021)
+    path.parent.mkdir(parents=True)
+    path.write_text("{not json", encoding="utf-8")
+    assert get_context(EPISODE, client=c).episode_title == "Soul Custody"
+    path.write_text(json.dumps({"show_id": 1, "name": "X", "premiered_year": None, "characters": [],
+                                "episodes": [], "fetched": "2026-11-19"}), encoding="utf-8")  # wrong shape
+    assert get_context(EPISODE, client=c).episode_title == "Soul Custody"
 
 
 def test_a_film_and_an_unreadable_name_say_what_is_missing(tmp_path):
@@ -152,3 +158,82 @@ def test_the_cache_lives_in_substudios_one_state_dir(monkeypatch, tmp_path):
     from core.context import state_dir
     monkeypatch.setattr(api.config, "STATE_DIR", tmp_path / "state")
     assert state_dir() == tmp_path / "state" / "context"
+
+
+# --- review findings (2026-11-19) ---------------------------------------------------------------------------------
+
+def test_unexpected_answers_and_disk_errors_are_reasons_never_crashes(tmp_path):
+    def answers(shape):
+        def handler(request):
+            return httpx.Response(200, json=shape)
+        return TvmazeClient(tmp_path, http=httpx.Client(base_url="https://api.tvmaze.com",
+                                                         transport=httpx.MockTransport(handler)), pause_s=0)
+    for shape in ({"show": 1}, [1, "x", {"show": {"name": "Ghosts"}}], None, "text"):
+        ctx = get_context(EPISODE, client=answers(shape))
+        assert ctx.summary == "" and ctx.title == "Ghosts (2021) S05E01" and ctx.missing, shape
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+    (blocked / "tvmaze").write_text("a file where the cache folder should be", encoding="utf-8")
+    ctx = get_context(EPISODE, client=client(blocked, []))
+    assert ctx.episode_title == "Soul Custody" and ctx.missing == ""   # uncached, still complete
+
+    class Broken:
+        def series(self, *a):
+            raise RuntimeError("bug")
+    ctx = get_context(EPISODE, client=Broken())
+    assert ctx.missing == "the context could not be built (RuntimeError): none is used" and ctx.summary == ""
+
+
+def test_two_different_titles_never_share_a_cache_file(tmp_path):
+    c = client(tmp_path, [])
+    paths = {c._cache_path(t, y) for t, y in [("Élite", None), ("Lite", None), ("東京", None), ("大阪", None),
+                                               ("Ghosts", 2021), ("Ghosts", 2019), ("Ghosts", None)]}
+    assert len(paths) == 7
+
+
+def test_titles_and_articles_are_never_names_to_keep():
+    from core.context import _name_parts
+    assert _name_parts(["The Doctor", "Captain Isaac Higgintoot"]) == ["Isaac Higgintoot", "Isaac", "Higgintoot"]
+    cues = [cue(1, "Thank you, Captain."), cue(2, "Yes, Captain."), cue(3, "> Previously on Ghosts"),
+            cue(4, "> Previously, Sam said.")]
+    assert proper_nouns(cues) == []
+
+
+def test_a_film_is_called_a_film():
+    ctx = get_context("C:/Videos/Inception.2010.1080p.mkv")
+    assert ctx.notes == "Film: Inception (2010)." and ctx.series == ""
+
+
+def test_an_episode_without_a_summary_yet_is_asked_again_next_time(tmp_path):
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        if request.url.path == "/shows/46573/episodebynumber":
+            return httpx.Response(200, json={"name": "Soul Custody", "summary": None})
+        return recorded([], None).handle_request(request)
+    c = TvmazeClient(tmp_path, http=httpx.Client(base_url="https://api.tvmaze.com",
+                                                 transport=httpx.MockTransport(handler)), pause_s=0)
+    first = get_context(EPISODE, client=c)
+    assert first.episode_title == "Soul Custody" and "no summary for this episode yet" in first.missing
+    calls.clear()
+    get_context(EPISODE, client=c)
+    assert calls == ["/shows/46573/episodebynumber"]          # series cached, the episode asked again
+
+
+def test_a_month_old_cache_is_looked_up_again(tmp_path):
+    calls = []
+    c = client(tmp_path, calls)
+    get_context(EPISODE, client=c)
+    path = c._cache_path("Ghosts", 2021)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["fetched"] = "2026-09-01"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    calls.clear()
+    get_context(EPISODE, client=c)
+    assert any("/search/shows" in u for u in calls)
+
+
+def test_a_file_without_a_title_says_so():
+    ctx = get_context("C:/Videos/S05E01.mkv")
+    assert ctx.missing == "the filename gives no title to look up" and (ctx.season, ctx.episode) == (5, 1)
