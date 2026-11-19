@@ -350,7 +350,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "passed" | "missing" | "pending" | "running" | "failed" | "unknown";
+            state: "passed" | "missing" | "unchecked" | "pending" | "running" | "failed" | "unknown";
         };
         /**
          * LibraryChangedEvent

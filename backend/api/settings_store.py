@@ -65,4 +65,14 @@ def save_settings(settings: Settings) -> Settings:
 
 def provider_status() -> List[ProviderStatus]:
     # Only providers the code actually calls today; each new provider task adds its own line.
-    return [ProviderStatus(name="Gemini (optional cloud translation)", configured=bool(os.environ.get("GEMINI_API_KEY", "").strip()))]
+    # The local translator's paths come from the translator itself, so this line cannot drift from what it runs.
+    from core.translators.llamacpp import LlamaCppTranslator
+    local = LlamaCppTranslator().server
+    env = os.environ
+    return [
+        ProviderStatus(name="Local translator (TranslateGemma 4B, llama.cpp)",
+                       configured=os.path.isfile(local.model) and os.path.isfile(local.binary)),
+        ProviderStatus(name="OpenSubtitles.com account (optional subtitle downloads)",
+                       configured=bool(env.get("OPENSUBTITLES_USERNAME", "").strip() and env.get("OPENSUBTITLES_PASSWORD", "").strip())),
+        ProviderStatus(name="Gemini (optional cloud translation)", configured=bool(env.get("GEMINI_API_KEY", "").strip())),
+    ]

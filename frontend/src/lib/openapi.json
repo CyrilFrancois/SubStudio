@@ -485,6 +485,7 @@
             "enum": [
               "passed",
               "missing",
+              "unchecked",
               "pending",
               "running",
               "failed",

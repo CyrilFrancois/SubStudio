@@ -148,13 +148,13 @@ export default function SettingsPage() {
 
         <Section
           title="Subtitles that already exist"
-          hint="Subtitles this SubStudio did not make (tracks inside the video, .srt files next to it, and everything the old SubStudio wrote) are listed in the Library but not trusted. Turn this on only if your existing subtitles are good."
+          hint="On: subtitles already in or next to a video are checked for timing, language and readability when the video is started; good ones are kept and the file stays as it is. Until then the Library shows them as « not checked yet ». Off: they are ignored and every language is made again."
         >
           <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
             <input type="checkbox" checked={settings.count_existing}
                    onChange={e => apply({ ...settings, count_existing: e.target.checked })}
                    className="w-4 h-4 accent-indigo-600" />
-            Count existing subtitles as done
+            Keep existing subtitles when the quality check passes them
           </label>
         </Section>
 
@@ -165,13 +165,13 @@ export default function SettingsPage() {
           <span className="sr-only">No setting: this is how SubStudio always works.</span>
         </Section>
 
-        <Section title="Services" hint="Only whether a key is set is shown, never the key itself. Keys live in the backend's .env file.">
+        <Section title="Services" hint="Only whether each service is ready is shown, never a key. Keys live in the backend's .env file.">
           <ul className="space-y-1.5 text-sm">
             {providers.map(p => (
               <li key={p.name} className="flex items-center gap-2">
                 {p.configured
-                  ? <><Check size={14} className="text-emerald-400" aria-hidden /><span className="text-gray-300">{p.name}</span><span className="text-xs text-emerald-300">key set</span></>
-                  : <><XCircle size={14} className="text-gray-500" aria-hidden /><span className="text-gray-300">{p.name}</span><span className="text-xs text-gray-500">no key</span></>}
+                  ? <><Check size={14} className="text-emerald-400" aria-hidden /><span className="text-gray-300">{p.name}</span><span className="text-xs text-emerald-300">ready</span></>
+                  : <><XCircle size={14} className="text-gray-500" aria-hidden /><span className="text-gray-300">{p.name}</span><span className="text-xs text-gray-500">not set up</span></>}
               </li>
             ))}
           </ul>

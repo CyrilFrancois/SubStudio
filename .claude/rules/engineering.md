@@ -219,7 +219,7 @@ Videos are addressed by `LibraryVideo.id` (hash of the path), never by the path 
 
 | Route | Notes |
 |---|---|
-| `GET /api/library` | Every video under `SUBSTUDIO_MEDIA_ROOT` × every wanted language: `passed` (with origin) / `missing` / `pending` / `running` / `failed` / `unknown` (ffprobe failed). ffprobe cached by path+mtime+size. What counts as ours: `core/provenance.py`, the one rule. |
+| `GET /api/library` | Every video under `SUBSTUDIO_MEDIA_ROOT` × every wanted language: `passed` (with origin) / `missing` / `unchecked` (a subtitle SubStudio did not make, not judged by the gate yet: it counts only once the job store's verdict record passes it, D-0002) / `pending` / `running` / `failed` / `unknown` (ffprobe failed). ffprobe cached by path+mtime+size. What counts as ours: `core/provenance.py`, the one rule. |
 | `GET/PUT /api/settings` | `{languages, count_existing}`, JSON under `SUBSTUDIO_STATE_DIR`, written atomically. |
 | `POST/GET /api/jobs`, `DELETE /api/jobs/{id}`, `GET /api/events`, `GET/PUT /api/subtitles/{id}/{lang}` | Stub only with `SUBSTUDIO_API_STUB=1`; otherwise 501 with the sentence the UI shows, until the job store implements the same models. `/api/events` is one SSE stream, frames discriminated by `kind` (`job`, `log` with the backend's `ts`, `library`). |
 | `GET /api/system` | `stub`, media root, CPU/RAM against the D-0001 budget. |
