@@ -2,6 +2,8 @@
 """
 Free and local (D-0001), chosen on the bench (D-0003). One call translates one batch of cues sent as numbered lines
 `id|text`; the answer is parsed back by id. translate_cues checks the id set, retries, splits and re-attaches timings.
+A batch of ONE cue is sent as plain text, with no id: its id is known, so its answer cannot be misnumbered. That is
+where a split ends, so the reply format can never be the reason a cue stays untranslated.
 
 The prompt is the model's own chat template, read from the running server (/props) and rendered here, because
 llama.cpp's chat endpoint cannot pass TranslateGemma's source_lang_code/target_lang_code fields. A language the
@@ -23,7 +25,15 @@ from .llama_server import LlamaServer
 logger = logging.getLogger("SubStudio.LocalTranslator")
 
 _HOME = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "SubStudio"
-_LINE = re.compile(r"^\s*\[?(\d+)\]?\s*[|:.)\]]\s*(.*)$")
+# The id, then a separator: « | : . ) ] / » or « -> », or only whitespace (NBSP and U+202F included, which French
+# typography puts before « ? ») when the text then starts like a sentence. Shapes seen on Ghosts S05E12 FR
+# (2026-11-19): « 69/afin que… », « 200 le contenu… ». « 272\xa0? Une chambre\xa0? » is NOT read as cue 272's text
+# (a reply starting « ? » is not a translation); it stays a wrong answer, so the batch splits down to a plain cue.
+_LINE = re.compile(r"^\s*\[?(\d+)\]?(?:\s*(?:[|:.)\]/]|->)\s*|\s+(?=[^\W\d_]|[«\"“'¿¡-]))(.*)$")
+# A one-cue answer is sent no id; one still put in front, with an explicit separator, is dropped. A reply that starts
+# with the cue's number and then punctuation (« 272\xa0? Une chambre ») is a wrong answer, never a translation.
+_ONE_ID = r"^\s*\[?{id}\]?\s*(?:[|:.)\]/]|->)\s*"
+_ONE_BAD = r"^\s*{id}\s*[^\w\s«\"“'¿¡-]"
 _DASH = re.compile(r"^\s*[-–—]\s*")
 _SPEAKER_SPLIT = re.compile(r"\s+[-–—]\s+")
 
@@ -74,7 +84,9 @@ class LlamaCppTranslator:
         url = self.server.ensure_running()
         # A cue's own line breaks are layout, not meaning: one line per cue keeps the id prefix parseable,
         # and wrap_lines re-wraps the translation afterwards.
-        text = "\n".join(f"{c['id']}|{' '.join(c['text'].split())}" for c in cues)
+        single = len(cues) == 1
+        text = (" ".join(cues[0]["text"].split()) if single
+                else "\n".join(f"{c['id']}|{' '.join(c['text'].split())}" for c in cues))
         prompt = self._render(text, source, target)
         r = self.http.post(f"{url}/completion", json={
             "prompt": prompt, "temperature": 0, "cache_prompt": True,
@@ -86,9 +98,15 @@ class LlamaCppTranslator:
         if data.get("stop_type") == "limit":
             # Cut at the token limit: a wrong answer, so translate_cues splits the batch instead of resending it.
             raise BatchMismatch("reply cut at the output token limit (stop_type=limit)")
+        reply = data.get("content", "")
         speakers = {c["id"]: _dialogue_lines(c["text"]) for c in cues}
-        return [{"id": t["id"], "text": _restore_dialogue(t["text"], speakers.get(t["id"], 0))}
-                for t in self._parse(data.get("content", ""))]
+        try:
+            got = self._parse_one(reply, cues[0]["id"], speakers[cues[0]["id"]]) if single else self._parse(reply)
+        except BatchMismatch:
+            # The raw reply is the evidence a parser change is judged on: the warning above it shows one line only.
+            logger.warning(f"Unparseable reply for cues {cues[0]['id']}-{cues[-1]['id']}: {reply[:600]!r}")
+            raise
+        return [{"id": t["id"], "text": _restore_dialogue(t["text"], speakers.get(t["id"], 0))} for t in got]
 
     def _render(self, text: str, source: str, target: str) -> str:
         if self._template is None:
@@ -108,15 +126,44 @@ class LlamaCppTranslator:
 
     @staticmethod
     def _parse(reply: str) -> List[CueText]:
+        """Numbered lines back to {id, text}. An unnumbered line BETWEEN two numbered ones continues the one before:
+        the model wraps a long translation (« dans le bunker. », « à l'aéroport. » on S05E12). When that line was
+        really the next cue's, its id is missing and translate_cues rejects the batch: the id set is the check.
+        An unnumbered line before the first or after the last numbered line is chatter: a wrong answer."""
         out: Dict[int, str] = {}
+        last: Optional[int] = None
+        pending: List[str] = []  # unnumbered lines waiting for a numbered line to prove they were a continuation
         for line in reply.splitlines():
+            if not line.strip():
+                continue
             m = _LINE.match(line)
             if not m:
-                if line.strip():
+                if last is None:
                     raise BatchMismatch(f"unnumbered line in the reply: {line.strip()[:60]!r}")
+                pending.append(line.strip())
                 continue
+            if pending:
+                out[last] = " ".join([out[last], *pending]).strip()
+                pending = []
             i = int(m.group(1))
             if i in out:
                 raise BatchMismatch(f"id {i} answered twice")
             out[i] = m.group(2).strip()
+            last = i
+        if pending:
+            raise BatchMismatch(f"unnumbered line after the last answer: {pending[0][:60]!r}")
         return [{"id": i, "text": t} for i, t in out.items()]
+
+    @staticmethod
+    def _parse_one(reply: str, cue_id: int, speakers: int) -> List[CueText]:
+        """A one-cue answer is the translation itself, on one line, or one line per speaker of a dialogue cue.
+        More lines is chatter (« Here is the translation: »); a leading « 272 ? » is a wrong answer. translate_cues
+        then keeps the cue in its source language, named, rather than ship either."""
+        lines = [l.strip() for l in reply.splitlines() if l.strip()]
+        if lines:
+            lines[0] = re.sub(_ONE_ID.format(id=cue_id), "", lines[0], count=1)
+        if not lines or not lines[0] or re.match(_ONE_BAD.format(id=cue_id), lines[0]):
+            raise BatchMismatch(f"not a translation of cue {cue_id}: {reply.strip()[:60]!r}")
+        if len(lines) > max(1, speakers):
+            raise BatchMismatch(f"{len(lines)} lines for one cue: {reply.strip()[:60]!r}")
+        return [{"id": cue_id, "text": "\n".join(lines)}]
