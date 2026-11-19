@@ -1,4 +1,4 @@
-# translator.py — GeminiTranslator: optional cloud backend of the Translator contract, plus the filename story bible. Exports: GeminiTranslator.
+# translator.py — GeminiTranslator: optional cloud backend of the Translator contract. Exports: GeminiTranslator.
 
 import json
 import logging
@@ -67,22 +67,6 @@ class GeminiTranslator:
         if not text:
             raise RuntimeError("Gemini returned an empty text")
         return text
-
-    def get_context_profile(self, filename: str) -> str:
-        """A 'story bible' guessed from the filename: names, genders, tone. Empty-safe: a failure gives a neutral note."""
-        logger.info(f"AI searching filename context: {filename}")
-        prompt = f"""Identify the media from this filename: '{filename}'
-        Return a 'Story Bible' for a translator:
-        - Series/Movie Title
-        - Characters (Names, Genders, talking default)
-        - Tone (Slang, Formal, Medical, Sci-Fi)
-        - Brief Plot Context
-        If unknown, infer from keywords."""
-        try:
-            return self._generate(prompt, temperature=0.3)
-        except Exception as e:
-            logger.error(f"   ❌ Context Research failed: {e}")
-            return "Neutral media content. No specific character data."
 
     def translate(self, cues: List[CueText], target: str, context: TranslationContext) -> List[CueText]:
         reply = self._generate(json.dumps(cues, ensure_ascii=False), temperature=0.2,

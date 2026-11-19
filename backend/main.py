@@ -22,12 +22,14 @@ from core.acquire import plan
 from core.acquire.existing import audio_language, find_existing, label_by_text, picked_sidecar
 from core.acquire.plan import OV_TAGS
 from core.ladder import Ladder, LadderDeps
+from core.context import get_context
 from core.subtitle_processor import SubtitleProcessor
 from core.output import current_path, write_run
 from core.provenance import substudio_track_title
 from core.events import event_manager, setup_logging_bridge
 from core.jobs import job_registry, JobAborted
 from api import router as api_router
+from api.job_runner import job_runner
 
 # /data inside Docker; set SUBSTUDIO_MEDIA_ROOT (e.g. C:/Videos) when the backend runs natively.
 MEDIA_ROOT = os.getenv("SUBSTUDIO_MEDIA_ROOT", "/data")
@@ -61,6 +63,11 @@ class GlobalOptions(BaseModel):
 class ProcessRequest(BaseModel):
     videos: List[VideoJob]
     globalOptions: GlobalOptions
+
+class _OfflineLookup:
+    """Stands in for the TVmaze client when online lookups are off: get_context records why nothing was looked up."""
+    def series(self, title, year):
+        return None, "online lookups are off (SUBSTUDIO_DOWNLOADS=0)"
 
 # --- ORCHESTRATOR ---
 
@@ -112,6 +119,11 @@ class PipelineOrchestrator:
             logger.info("🏁 BATCH PROCESSING FINISHED")
             event_manager.emit("system_events", "batch_done", 100, "All tasks completed")
 
+    def _context(self, video_path: str, cues=None) -> TranslationContext:
+        """The translation context of a video, with the names found in `cues` (the source being translated).
+        Offline (SUBSTUDIO_DOWNLOADS=0) the lookup is skipped and the context says so."""
+        return get_context(video_path, cues, client=None if self.downloads_enabled else _OfflineLookup())
+
     def _ladder(self, run: VideoRun, video: "VideoJob", opts: "GlobalOptions", job, p: str, index: int, total: int,
                 preloaded: Optional[Dict[str, list]] = None, unlabelled: Optional[list] = None) -> Ladder:
         # A retry reads the video where it is NOW: after a swap it carries its (Sub-…) name, not video.path.
@@ -127,6 +139,7 @@ class PipelineOrchestrator:
             load_embedded=lambda i: self.processor.extract_embedded_subs(str(current_path(run)), i, job=job),
             downloads_enabled=self.downloads_enabled, count_existing=self.count_existing,
             preloaded=preloaded or {}, unlabelled=unlabelled, check_abort=job.raise_if_aborted,
+            context=lambda cues: self._context(run.path, cues),
             progress=lambda status, pct, msg: event_manager.emit(run.path, status, pct, f"{p} {msg}")))
 
     async def _run_cell(self, run: VideoRun, ladder: Ladder, lang_code: str, job, p: str):
@@ -215,10 +228,10 @@ class PipelineOrchestrator:
         logger.info(f"{p} STARTING: {video.name}")
 
         try:
-            # STEP 1: CONTEXT
+            # STEP 1: CONTEXT — looked up (filename, TVmaze), never invented; names from the source join it later.
             job.raise_if_aborted()
-            event_manager.emit(fid, "processing", 5, f"{p} Step 1/5: Analyzing context...")
-            context = await asyncio.to_thread(self.translator.get_context_profile, video.name)
+            event_manager.emit(fid, "processing", 5, f"{p} Step 1/5: Looking up the episode...")
+            context = await asyncio.to_thread(self._context, video.path)
 
             # STEP 2: WHAT IS ALREADY THERE — tracks and sidecars, plus the sidecar the user picked (trusted: his
             # choice), and the audio language that « OV » stands for.
@@ -236,7 +249,7 @@ class PipelineOrchestrator:
             original = await asyncio.to_thread(audio_language, video.path)
 
             # STEP 3: ONE PLAN AND ONE CELL PER LANGUAGE (D-0002) — each passes or fails alone, with its origin.
-            run = VideoRun(path=fid, cells={}, context=TranslationContext(title=video.name, notes=context))
+            run = VideoRun(path=fid, cells={}, context=context)
             ladder = self._ladder(run, video, opts, job, p, index, total, preloaded, unlabelled)
             if original is None and any(o.strip().lower() in OV_TAGS for o in video.out):
                 # Untagged audio: Whisper identifies the language on a sample, without a full transcription.
@@ -286,7 +299,9 @@ async def lifespan(app: FastAPI):
     orchestrator = PipelineOrchestrator()
     # The pipeline runs off-loop; EventManager needs this loop to hand SSE data back safely.
     event_manager.bind_loop(asyncio.get_running_loop())
+    job_runner.connect(orchestrator, VideoJob, GlobalOptions)  # the stored queue (/api/jobs) runs through this pipeline
     yield
+    await job_runner.stop()
 
 # --- API ---
 app = FastAPI(title="SubStudio Pro", lifespan=lifespan)

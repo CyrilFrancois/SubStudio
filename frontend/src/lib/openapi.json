@@ -1218,6 +1218,63 @@
         ]
       }
     },
+    "/api/jobs/{job_id}/logs": {
+      "get": {
+        "description": "A job's log lines with the backend's timestamps, oldest first, so a fresh tab shows its history.",
+        "operationId": "job_logs_api_jobs__job_id__logs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 500,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LogEvent"
+                  },
+                  "title": "Response Job Logs Api Jobs  Job Id  Logs Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Job Logs",
+        "tags": [
+          "ui"
+        ]
+      }
+    },
     "/api/library": {
       "get": {
         "operationId": "get_library_api_library_get",

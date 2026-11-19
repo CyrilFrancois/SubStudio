@@ -1,9 +1,9 @@
-# events.py — EventManager: thread-safe SSE broadcast per file_id. Exports: event_manager, setup_logging_bridge.
+# events.py — EventManager: thread-safe SSE broadcast per file_id, plus listeners (the job store). Exports: event_manager, setup_logging_bridge.
 
 import asyncio
 import json
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger("SubStudio.Events")
 
@@ -28,6 +28,16 @@ class EventManager:
         self.listeners: Dict[str, List[asyncio.Queue]] = {}
         self.state_cache: Dict[str, Dict[str, Any]] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        # Called synchronously with (file_id, frame) for every frame, in the emitting thread (api/job_runner maps
+        # them to job stages and logs). A listener that raises is logged and never breaks the pipeline.
+        self._hooks: List[Callable[[str, Dict[str, Any]], None]] = []
+
+    def add_listener(self, fn: Callable[[str, Dict[str, Any]], None]):
+        self._hooks.append(fn)
+
+    def remove_listener(self, fn: Callable[[str, Dict[str, Any]], None]):
+        if fn in self._hooks:
+            self._hooks.remove(fn)
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop):
         self._loop = loop
@@ -56,6 +66,11 @@ class EventManager:
         })
 
     def _broadcast(self, file_id: str, data: Dict[str, Any]):
+        for hook in list(self._hooks):
+            try:
+                hook(file_id, data)
+            except Exception:
+                logger.exception("Event listener failed")
         if file_id not in self.listeners:
             return
 
