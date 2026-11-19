@@ -86,14 +86,16 @@ def test_a_language_that_cannot_be_translated_fails_the_video_and_writes_nothing
     assert not clip.with_suffix(".fr.srt").exists()
 
 
-def test_a_language_the_muxer_cannot_title_fails_before_any_work(clip):
+def test_a_language_that_cannot_be_named_fails_before_any_work(clip):
+    # « fre » is no longer invalid: the planner reads it as French (ISO 639-2/B), like any MKV tag. A code that
+    # names no language still fails the video before a single cue is translated.
     called = []
     class Spy(Upper):
         def translate(self, cues, target, context):
             called.append(target)
             return super().translate(cues, target, context)
-    status = run(clip, Spy(), out=("fre",))
-    assert status["status"] == "error" and "fre" in status["message"], status
+    status = run(clip, Spy(), out=("xx",))
+    assert status["status"] == "error" and "xx" in status["message"], status
     assert called == []
 
 

@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { AlertCircle, CheckCircle2, Loader2, Play, RefreshCw, Search, X } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Loader2, Play, RefreshCw, Search, WifiOff, X } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
 import { useJobEvents } from '@/lib/events';
 import { languageName } from '@/lib/languages';
@@ -51,7 +51,7 @@ export default function LibraryPage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
-  const { jobs } = useJobEvents(load);
+  const { jobs, connection } = useJobEvents(load);
   const jobList = useMemo(() => Object.values(jobs), [jobs]);
 
   const rows: Row[] = useMemo(() => (lib?.videos ?? []).map(v => ({
@@ -128,6 +128,11 @@ export default function LibraryPage() {
                   <span title={lib.root}>{lib.videos.length} videos</span>
                   {languages.map(l => <span key={l}> · {languageName(l)} missing on {missingCount(l)}</span>)}
                   {' · '}scanned {new Date(lib.scanned_at).toLocaleTimeString()}
+                  {connection === 'lost' && (
+                    <span role="status" className="text-amber-300">
+                      {' · '}<WifiOff size={12} className="inline -mt-0.5" aria-hidden /> live updates lost, reconnecting (cells may be stale)
+                    </span>
+                  )}
                 </>
               ) : loading ? 'Reading the library…' : ''}
             </p>

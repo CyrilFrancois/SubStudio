@@ -1,7 +1,7 @@
 // page.tsx — Settings: the one wanted-language list, output, whether existing subtitles count; saved on change. Exports: default SettingsPage.
 "use client";
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AlertCircle, ArrowDown, ArrowUp, Check, CheckCircle2, Loader2, Plus, X, XCircle } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
 import { ISO_639_1, languageName } from '@/lib/languages';
@@ -35,7 +35,13 @@ export default function SettingsPage() {
       .catch((e: ApiError) => setLoadError(e.message));
   }, []);
 
+  // One save at a time: two PUTs in flight could land in either order, leaving the file and the
+  // screen different. The ref closes the window between a click and React disabling the fieldset.
+  const saving = useRef(false);
+
   const apply = async (next: Settings) => {
+    if (saving.current) return;
+    saving.current = true;
     const previous = settings;
     setSettings(next);
     setSave({ state: 'saving' });
@@ -48,6 +54,8 @@ export default function SettingsPage() {
       // Roll back: the screen must never show a value the backend did not keep.
       setSettings(previous);
       setSave({ state: 'error', message: (e as ApiError).message });
+    } finally {
+      saving.current = false;
     }
   };
 
@@ -83,6 +91,7 @@ export default function SettingsPage() {
           </span>
         </div>
 
+        <fieldset disabled={save.state === 'saving'} className="disabled:opacity-70">
         <Section
           title="Languages I want"
           hint="Every video should end up with subtitles in these languages, remembered for next time. This is the only language list: the Library columns and « Start » use it, in this order. When the original version is already English or French, it is one track, made once."
@@ -167,6 +176,7 @@ export default function SettingsPage() {
             ))}
           </ul>
         </Section>
+        </fieldset>
       </div>
     </div>
   );
