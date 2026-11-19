@@ -213,6 +213,7 @@ def test_overlay_marks_cells_a_job_will_change(store):
     ("transcribing", 50, ("transcribe", 0.5)),  # transcriber 5..95
     ("translating", 60, ("translate", 0.5)),    # main.py 40..80
     ("processing", 90, ("write", 0.0)),         # Step 5/5
+    ("processing", 100, ("write", 1.0)),        # Step 5/5: written
     ("done", 100, None), ("error", 0, None), ("cancelled", 0, None),
 ])
 def test_stage_of(status, pct, expected):
@@ -285,6 +286,19 @@ def test_runner_runs_a_job_to_done_with_stages_and_logs(store):
     assert orch.seen == [(["fr"], "whisper", 0.25)]                # options reach the pipeline
     assert [l.message for l in store.logs(job.id)] == ["INFO: two subtitles found"]
     assert job_registry.get("/data/a.mkv") is None                  # released after the run
+
+
+def test_a_written_video_reads_write_done_when_a_language_failed(store):
+    # S05E12, 2026-11-19: EN written, FR failed; the stepper said « write failed » about a file that was written.
+    job = store.create(JobCreate(video_ids=["a"]), library(video("a", {"fr": "missing"}))).jobs[0]
+    store.start(job.id)
+    store.set_stage(job.id, "write", "running", 1.0)
+    j = store.finish(job.id, "failed", "EN ✓ transcribed · FR failed: cue 272")
+    assert j.state == "failed" and stage_states(j)["write"] == "done"
+    other = store.create(JobCreate(video_ids=["b"]), library(video("b", {"fr": "missing"}))).jobs[0]
+    store.start(other.id)
+    store.set_stage(other.id, "write", "running", 0.0)        # crashed while writing: that stage did fail
+    assert stage_states(store.finish(other.id, "failed", "swap check failed"))["write"] == "failed"
 
 
 def test_runner_failure_carries_the_pipeline_sentence(store):
