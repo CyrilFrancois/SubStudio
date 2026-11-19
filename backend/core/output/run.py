@@ -6,7 +6,9 @@
 - origin per track = Cell.origin.kind() (downloaded | translated | transcribed), written as the ORIGIN_TAG;
 - reviewed tag     = the cells a person saved in the Review screen (Cell.reviewed), so a rebuild keeps the mark;
 - from / untranslated tags = a translated cell's source language, and its lines still identical to the source
-  (core/gate/text.untranslated, the gate's rule), so the Library and Review show them after a restart.
+  (core/gate/text.untranslated, the gate's rule), so the Library and Review show them after a restart;
+- rejected         = the embedded subtitles the gate refused (VideoRun.judged): one in a language written here
+  loses « default », and our track comes first in its language, so a player no longer picks the refused one.
 
 A video whose passed cells are all « kept » is left exactly as it was: no write, no rename. After a swap the video
 has a new name; it is recorded on the run (VideoRun.output_path) so a retry rewrites the renamed file, never
@@ -42,6 +44,11 @@ def write_run(run: VideoRun, job: Optional[JobHandle] = None) -> Optional[Output
     # Plus the cues the translator kept refusing, which may be too short for that rule (core/cells.produce_cell).
     left = {lang: set(untranslated(src.cues, run.cells[lang].cues)) | set(run.cells[lang].left_in_source)
             for lang, src in sources.items() if src}
+    # The gate's refs are positions among the subtitles of the video the run judged: valid only while the file is
+    # still that one. A retry rewrites the swapped file, where the first write already demoted them (and kept flags
+    # are copied as they are), so it passes none rather than positions that now name other tracks.
+    rejected = [int(ref) for (kind, ref), passed in run.judged.items() if kind == "embedded" and not passed] \
+        if run.output_path is None else []
     result = update_in_place(
         current_path(run),
         {c.language: c.cues for c in new},
@@ -52,6 +59,7 @@ def write_run(run: VideoRun, job: Optional[JobHandle] = None) -> Optional[Output
         untranslated=left,
         from_languages={c.language: c.origin.from_language for c in new
                         if c.origin.kind() == "translated" and c.origin.from_language},
+        rejected=rejected,
         job=job,
     )
     if result.status == "updated":

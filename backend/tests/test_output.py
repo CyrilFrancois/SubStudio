@@ -150,8 +150,8 @@ def test_failed_verify_leaves_source_byte_identical(tmp_path, monkeypatch):
     before = _sha(src)
     real = inplace._mux_args
 
-    def truncated(*args):   # a mux that silently loses the last 3 s: only the verify step can catch it
-        cmd = real(*args)
+    def truncated(*args, **kw):   # a mux that silently loses the last 3 s: only the verify step can catch it
+        cmd = real(*args, **kw)
         return cmd[:-3] + ["-t", "2"] + cmd[-3:]
 
     monkeypatch.setattr(inplace, "_mux_args", truncated)
@@ -165,8 +165,8 @@ def test_failed_verify_on_lost_audio(tmp_path, monkeypatch):
     before = _sha(src)
     real = inplace._mux_args
 
-    def no_audio(*args):
-        cmd = real(*args)
+    def no_audio(*args, **kw):
+        cmd = real(*args, **kw)
         i = cmd.index("0:1")       # the audio stream's map
         return cmd[:i - 1] + cmd[i + 1:]
 
@@ -180,7 +180,7 @@ def test_ffmpeg_failure_leaves_source_byte_identical(tmp_path, monkeypatch):
     src = _mkv_with_sdh(tmp_path)
     before = _sha(src)
     real = inplace._mux_args
-    monkeypatch.setattr(inplace, "_mux_args", lambda *a: real(*a)[:-1] + ["-bogus-option", str(a[-1])])
+    monkeypatch.setattr(inplace, "_mux_args", lambda *a, **k: real(*a, **k)[:-1] + ["-bogus-option", str(a[3])])
     with pytest.raises(OutputError, match="ffmpeg"):
         _upd(src, {"fr": FR}, ["en", "fr"])
     _assert_source_intact(src, before)
@@ -261,15 +261,16 @@ def test_chapters_survive(tmp_path):
 def test_lost_existing_subtitle_fails_verify(tmp_path, monkeypatch):
     src = _mkv_with_sdh(tmp_path)
     before = _sha(src)
-    monkeypatch.setattr(inplace, "_kept_subs", lambda info, langs: [])   # the mux forgets the SDH track…
+    real_plan = inplace._sub_plan       # the mux forgets the SDH track…
+    monkeypatch.setattr(inplace, "_sub_plan", lambda info, langs: [x for x in real_plan(info, langs) if isinstance(x, str)])
     real_verify = inplace._verify
 
-    def verify_against_truth(*args):  # …but the check knows it was there
+    def verify_against_truth(*args, **kw):  # …but the check knows it was there
         monkeypatch.undo()
-        real_verify(*args)
+        real_verify(*args, **kw)
 
     monkeypatch.setattr(inplace, "_verify", verify_against_truth)
-    with pytest.raises(OutputError, match="subtitle tracks were not all kept"):
+    with pytest.raises(OutputError, match="subtitle tracks are not the ones planned"):
         _upd(src, {"fr": FR}, ["en", "fr"])
     _assert_source_intact(src, before)
 
@@ -291,8 +292,8 @@ def test_target_appearing_during_the_update_is_never_overwritten(tmp_path, monke
     other = tmp_path / "Ghosts S05E01 (Sub-EN,FR).mkv"
     real_verify = inplace._verify
 
-    def verify_then_race(*args):
-        real_verify(*args)
+    def verify_then_race(*args, **kw):
+        real_verify(*args, **kw)
         other.write_bytes(b"arrived meanwhile")
 
     monkeypatch.setattr(inplace, "_verify", verify_then_race)
@@ -306,7 +307,7 @@ def test_interrupt_or_cancel_leaves_source_byte_identical(tmp_path, monkeypatch,
     src = _mkv_with_sdh(tmp_path)
     before = _sha(src)
 
-    def boom(*args):
+    def boom(*args, **kw):
         raise exc()
 
     monkeypatch.setattr(inplace, "_verify", boom)
@@ -473,7 +474,7 @@ def test_the_check_refuses_a_file_whose_untranslated_tag_was_not_written(tmp_pat
     src = _mkv_with_sdh(tmp_path)
     before = _sha(src)
     real = inplace._mux_args
-    monkeypatch.setattr(inplace, "_mux_args", lambda *a: real(*a[:8]))      # the mux forgets the extra tags
+    monkeypatch.setattr(inplace, "_mux_args", lambda *a, **k: real(*a[:8], **k))   # the mux forgets the extra tags
     with pytest.raises(OutputError, match="SUBSTUDIO_UNTRANSLATED|SUBSTUDIO_FROM"):
         _upd(src, {"fr": LEFT}, ["en", "fr"], untranslated={"fr": {11}}, from_languages={"fr": "en"})
     assert _sha(src) == before and _no_temp(tmp_path)
