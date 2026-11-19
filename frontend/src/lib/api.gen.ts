@@ -485,8 +485,8 @@ export interface components {
         Settings: {
             /**
              * Count Existing
-             * @description Count subtitles not made by this SubStudio (core/provenance.py) as coverage. Off: listed, not trusted.
-             * @default false
+             * @description Count subtitles not made by this SubStudio (core/provenance.py) when the quality gate passes them (on by default: Cyril, 2026-11-19, D-0002). Off: listed, never counted, never checked.
+             * @default true
              */
             count_existing?: boolean;
             /**

@@ -14,9 +14,11 @@ if not shutil.which("ffmpeg"):
 
 import main  # noqa: E402
 from core.acquire.types import Rung  # noqa: E402
-from core.cells import Cell, CellState, Origin, Source, produce_cell  # noqa: E402
+from core.cells import Cell, CellState, Origin, Source, VideoRun, produce_cell  # noqa: E402
 from core.events import event_manager  # noqa: E402
 from core.subtitles import Cue, TranslationContext, detect_language  # noqa: E402
+from core.gate import Verdict  # noqa: E402
+PASS = Verdict(True)
 
 # Enough English for language detection (20+ words).
 ENGLISH = [
@@ -84,6 +86,8 @@ def track_text(video, index):
 
 def orchestrator(translator):
     orch = main.PipelineOrchestrator()
+    # The clips carry a tone, not speech: these tests check the cells' plumbing; core/gate has its own tests.
+    orch.gate = lambda *a, **k: PASS
     orch.translator = translator
     return orch
 
@@ -182,7 +186,7 @@ def test_an_abort_mid_cell_ends_it_failed_not_running():
     cues = [Cue(id=i + 1, start_ms=i * 1000, end_ms=i * 1000 + 900, text=t) for i, t in enumerate(ENGLISH)]
     from core.acquire.types import LanguagePlan, Step
     from core.ladder import Ladder, LadderDeps
-    run = main.VideoRun(path="v", cells={"de": Cell("de")},
+    run = VideoRun(path="v", cells={"de": Cell("de")},
                         plans={"de": LanguagePlan("de", [Step(Rung.TRANSLATE, "de", from_languages=("en",))])},
                         human={"en": Source(cues=cues, rung=Rung.EXISTING, language="en", context=TranslationContext())})
     handle = JobHandle("v")

@@ -142,8 +142,10 @@ and lost on restart.
 
 ### Backend (FastAPI, Python 3.10)
 
-- `backend/main.py` — `PipelineOrchestrator` + the four routes. Blocking steps dispatched with
-  `asyncio.to_thread`; the batch runs as an `asyncio.create_task`.
+- `backend/main.py` — the FastAPI app: routes and the lifespan that builds the orchestrator.
+- `backend/core/pipeline.py` — `PipelineOrchestrator` and the job models: per video, plan → rungs 1–2 →
+  3–4 through `core/ladder.py` (every result gated by `core/gate`) → the in-place update. Blocking steps
+  go through `asyncio.to_thread`; a batch runs as an `asyncio.create_task`.
 - `backend/core/scanner.py` — recursive `os.scandir` of `/data`; per-video ffprobe for embedded
   subtitle streams; sidecar lookup in `.`, `Subs/`, `Subtitles/`. Guards against escaping
   `base_path`.
