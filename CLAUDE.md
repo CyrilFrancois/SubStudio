@@ -10,9 +10,10 @@ in `SubStudio/CLAUDE.md` or `SubStudio/.claude/rules/*.md`. Map: `doc/harness-mi
 
 ## Context and goal
 
-**SubStudio:** a local media pipeline that transcribes video with Faster-Whisper, translates the
-subtitles (today: Google Gemini `gemini-3.8-flash` on branch `feat/gemini-and-stop-job`, OpenAI on `main`), and muxes
-them into MKV. FastAPI backend, Next.js 14 frontend, Docker Compose, **no database**.
+**SubStudio:** a local media pipeline that gives every selected video good subtitles in the wanted languages: keep
+an existing one the quality gate passes, else download and re-time one, else translate locally (TranslateGemma 4B on
+llama.cpp, D-0003; Gemini opt-in), else transcribe (faster-whisper turbo), then update the video in place. FastAPI
+backend, Next.js 14 frontend, SQLite job store; runs natively on Windows (Docker is the unverified alternative).
 
 **Model constraint (Cyril, 2026-11-19; `doc/decisions/D-0001 local free models within half the machine.md`):** the
 best models that are **free and run locally**, using **at most half the computer** (4 of 8 threads, ≤ 7 GB RAM on
@@ -74,7 +75,7 @@ correct fix that makes the workflow worse is still wrong.
 | Source | URL or path | Access | Notes |
 |---|---|---|---|
 | Code | https://github.com/CyrilFrancois/SubStudio (public), local `SubStudio/` | Cyril's GitHub account | `origin/main` is production; renamed from videosToSubtitledvideos on 2026-11-18 |
-| App | http://localhost:3000 (UI), http://localhost:8000/health (API) | `docker compose up --build` | no database; state in memory |
+| App | http://localhost:3000 (UI), http://localhost:8000/health (API) | native: `readme.md` « Run it natively (Windows, PowerShell) » (venv + `python -m uvicorn`, `npm run dev`) | jobs, logs and verdicts in SQLite under `SUBSTUDIO_STATE_DIR`; settings persisted there too |
 | Test corpus | `C:\Videos` (mounted as `/data` in Docker; `SUBSTUDIO_MEDIA_ROOT` natively) | local | Cyril's test videos; rules in « Phase and what it forbids » |
 | Gemini key | https://aistudio.google.com/apikey | Cyril's Google account | value lives in `SubStudio/.env` only |
 | Backlog | workspace `TODOLIST.MD`, `### [SubStudio]` below the marker | Claude keeps it; Cyril's notes go above the marker | ordered by the architecture review |
