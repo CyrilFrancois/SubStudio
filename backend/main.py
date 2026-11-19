@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Any, Set
 # Core Imports
 from core.scanner import VideoScanner
 from core.transcriber import VideoTranscriber
-from core.translator import GeminiTranslator
+from core.translators import make_translator
 from core.subtitles import TranslationContext, wrap_lines
 from core.cells import Cell, CellState, VideoRun
 from core.acquire import plan
@@ -75,7 +75,10 @@ class PipelineOrchestrator:
     def __init__(self):
         self.scanner = VideoScanner(base_path=MEDIA_ROOT)
         self.transcriber = VideoTranscriber()
-        self.translator = GeminiTranslator()
+        self.translator = make_translator()
+        # A batch and a retry can run at once; they share one model server. Without this lock one video's
+        # unload() kills the server under the other's request, and its retry reloads it (D-0001).
+        self._translate_lock = asyncio.Lock()
         self.processor = SubtitleProcessor()
         # Rung 2 asks subtitle sites over the network; SUBSTUDIO_DOWNLOADS=0 keeps a run (or the tests) offline.
         self.downloads_enabled = os.getenv("SUBSTUDIO_DOWNLOADS", "1") != "0"
@@ -119,6 +122,15 @@ class PipelineOrchestrator:
             logger.info("🏁 BATCH PROCESSING FINISHED")
             event_manager.emit("system_events", "batch_done", 100, "All tasks completed")
 
+    @asynccontextmanager
+    async def _translation(self):
+        """One video's rungs 3-4 at a time; the model is freed afterwards, success or not (D-0001)."""
+        async with self._translate_lock:
+            try:
+                yield
+            finally:
+                await asyncio.to_thread(self.translator.unload)
+
     def _context(self, video_path: str, cues=None) -> TranslationContext:
         """The translation context of a video, with the names found in `cues` (the source being translated).
         Offline (SUBSTUDIO_DOWNLOADS=0) the lookup is skipped and the context says so."""
@@ -128,6 +140,9 @@ class PipelineOrchestrator:
                 preloaded: Optional[Dict[str, list]] = None, unlabelled: Optional[list] = None) -> Ladder:
         # A retry reads the video where it is NOW: after a swap it carries its (Sub-…) name, not video.path.
         def transcribe():
+            # Rung 4 can transcribe between two languages' translations: the translation model is freed first,
+            # so Whisper and the LLM are never in RAM together (D-0001), whatever order the ladder takes.
+            self.translator.unload()
             asr = self.transcriber.transcribe(
                 video_path=str(current_path(run)), file_id=run.path, on_progress=event_manager.emit,
                 current_file=index + 1, total_files=total, model_size=opts.transcriptionEngine, job=job)
@@ -203,7 +218,8 @@ class PipelineOrchestrator:
             # Rungs 1–2 ran for every language and their sources are kept: a retry redoes rungs 3–4 only.
             cell.state, cell.reason, cell.cues = CellState.PENDING, "", None
             cell.attempts = [a for a in cell.attempts if a.startswith(("existing", "download"))]
-            await self._run_cell(run, self._ladder(run, video, opts, job, p, 0, 1), lang_code, job, p)
+            async with self._translation():
+                await self._run_cell(run, self._ladder(run, video, opts, job, p, 0, 1), lang_code, job, p)
             await self._write_outputs(run, job, p)
             self._emit_outcome(run, p, video.name)
         except JobAborted:
@@ -267,8 +283,9 @@ class PipelineOrchestrator:
             # STEP 4: RUNGS 1–2 FOR EVERY LANGUAGE, THEN 3–4 PER CELL
             await ladder.human()
             event_manager.emit_cells(fid, run.to_json())
-            for lang_code in run.cells:
-                await self._run_cell(run, ladder, lang_code, job, p)
+            async with self._translation():
+                for lang_code in run.cells:
+                    await self._run_cell(run, ladder, lang_code, job, p)
 
             # STEP 5: OUTPUT — only the cells that passed
             await self._write_outputs(run, job, p)

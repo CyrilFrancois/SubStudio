@@ -40,6 +40,9 @@ class Tag:
         out = [{"id": c["id"], "text": f"[{target}] {c['text']}"} for c in cues]
         return out[1:] if target in self.broken else out
 
+    def unload(self):
+        pass
+
 
 @pytest.fixture
 def clip(tmp_path):
@@ -209,10 +212,15 @@ def test_a_transcription_uses_the_language_whisper_heard(tmp_path):
     asr = AsrResult(model="fake", language="en", language_probability=0.97, duration=3.0, speech=[(0.5, 1.4)],
                     segments=[AsrSegment(0.5, 1.4, "Hello there.", -0.2, 0.01, 1.1, words)])
     orch = orchestrator(Tag())
-    orch.transcriber.transcribe = lambda **kw: asr
+    order = []
+    orch.translator.unload = lambda: order.append("unload")
+    orch.transcriber.transcribe = lambda **kw: (order.append("asr"), asr)[1]
     job = main.VideoJob(name=video.name, path=str(video), out=["en", "de"], workflowMode="whisper")
     asyncio.run(orch.execute_pipeline(job, main.GlobalOptions(), 0, 1))
     cells = {c["language"]: c for c in orch.runs[str(video)].to_json()}
+    # D-0001: the translation model is freed before Whisper loads, and again once the video is done.
+    i = order.index("asr")
+    assert i > 0 and order[i - 1] == "unload" and order[-1] == "unload", order
     assert cells["en"]["origin"] == "transcribed" and orch.translator.calls == ["de"]
     assert cells["de"]["origin_label"] == "transcribed, translated from en"
     assert (cells["en"]["origin"], cells["de"]["origin"], cells["de"]["from_language"]) == ("transcribed", "translated", "en")

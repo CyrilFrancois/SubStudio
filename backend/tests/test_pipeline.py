@@ -26,8 +26,14 @@ SIDECAR = ("1\n00:00:00,500 --> 00:00:01,200\nBonjour Hélène.\n\n"
 class Upper:
     name, batch_size = "upper", 30
 
+    def __init__(self):
+        self.unloads = 0
+
     def translate(self, cues, target, context):
         return [{"id": c["id"], "text": f"[{target}] {c['text'].upper()}"} for c in reversed(cues)]
+
+    def unload(self):
+        self.unloads += 1
 
 
 class DropsOne(Upper):
@@ -55,8 +61,10 @@ def run(video, translator, out=("fr",)):
 
 
 def test_sidecar_to_mkv_keeps_timings_accents_and_clips_past_the_end(clip):
-    status = run(clip, Upper())
+    translator = Upper()
+    status = run(clip, translator)
     assert status["status"] == "done" and "FR ✓" in status["message"], status
+    assert translator.unloads == 1  # the model is freed before the next video's transcription
     out = clip.parent / f"{clip.stem} (Sub-FR).mkv"                              # updated in place, renamed
     assert out.is_file() and not clip.exists()
     probe = json.loads(subprocess.run(["ffprobe", "-v", "error", "-print_format", "json", "-show_streams",
@@ -81,8 +89,10 @@ class FrenchBroken(Upper):
 
 
 def test_a_language_that_cannot_be_translated_fails_the_video_and_writes_nothing(clip):
-    status = run(clip, DropsOne())
+    translator = DropsOne()
+    status = run(clip, translator)
     assert status["status"] == "error" and "fr:" in status["message"], status
+    assert translator.unloads == 1  # freed on failure too
     assert sorted(p.name for p in clip.parent.iterdir()) == [clip.name, clip.with_suffix(".srt").name]
     assert clip.read_bytes()                                                      # nothing passed: untouched
 

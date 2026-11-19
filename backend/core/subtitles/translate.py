@@ -51,6 +51,10 @@ class Translator(Protocol):
 
     def translate(self, cues: List[CueText], target: str, context: TranslationContext) -> List[CueText]: ...
 
+    # Called by the orchestrator after each video's languages, success or not: a local backend frees its model
+    # so it never shares RAM with the next transcription (D-0001). A backend holding nothing does nothing.
+    def unload(self) -> None: ...
+
 
 class TranslationFailed(RuntimeError):
     """A language could not be translated completely. Its message names the language and the cause."""

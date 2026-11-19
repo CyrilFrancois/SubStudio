@@ -68,6 +68,9 @@ class GeminiTranslator:
             raise RuntimeError("Gemini returned an empty text")
         return text
 
+    def unload(self) -> None:
+        """Part of the backend contract main.py calls after translating; a cloud backend holds no local model."""
+
     def translate(self, cues: List[CueText], target: str, context: TranslationContext) -> List[CueText]:
         reply = self._generate(json.dumps(cues, ensure_ascii=False), temperature=0.2,
                                system_prompt=self._system_prompt(target, context), schema=_BATCH_SCHEMA)
