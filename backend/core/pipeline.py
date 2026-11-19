@@ -16,7 +16,8 @@ from .acquire.plan import OV_TAGS
 from .cells import Cell, CellState, VideoRun
 from .context import get_context
 from .events import event_manager, setup_logging_bridge
-from .gate import detect_speech, evaluate, read_audio
+from .correct import correct_ov
+from .gate import THRESHOLDS, Verdict, detect_speech, evaluate, read_audio
 from .gate.speech import SAMPLE_RATE
 from .jobs import JobAborted, job_registry
 from .ladder import Ladder, LadderDeps
@@ -138,11 +139,31 @@ class PipelineOrchestrator:
             # Rung 4 can transcribe between two languages' translations: the translation model is freed first,
             # so Whisper and the LLM are never in RAM together (D-0001), whatever order the ladder takes.
             self.translator.unload()
-            asr = self.transcriber.transcribe(
-                video_path=str(current_path(run)), file_id=run.path, on_progress=event_manager.emit,
-                current_file=index + 1, total_files=total, model_size=opts.transcriptionEngine, job=job)
+            video_now = str(current_path(run))
+
+            def whisper(language=None, spans=None):
+                return self.transcriber.transcribe(
+                    video_path=video_now, file_id=run.path, on_progress=event_manager.emit, current_file=index + 1,
+                    total_files=total, model_size=opts.transcriptionEngine, language=language, spans=spans, job=job)
+
+            asr = whisper()
+
+            def judge(cues):  # the gate on the OV transcript, against the video's own speech (read once)
+                try:
+                    if run.speech is None:
+                        run.speech = _speech(video_now)
+                    return self.gate(cues, run.speech[0], asr.language, duration_ms=run.speech[1])
+                except JobAborted:
+                    raise
+                except Exception:  # unmeasurable: both versions look alike to the gate, the tie keeps the correction
+                    return Verdict(False, [])
+
+            # Rung 4's correction pass (user-process.md §2): doubtful segments re-heard in OV, names fixed.
+            cues, note = correct_ov(asr, lambda spans: whisper(asr.language, spans),
+                                    self._context(run.path, asr.to_cues()).glossary, judge, THRESHOLDS["max_cps"])
+            logger.info(f"{p} {note}")
             # Whisper hears the language; text detection only guesses it. Trusted when Whisper is sure.
-            return asr.to_cues(), (asr.language if asr.language_probability >= 0.9 else None)
+            return cues, (asr.language if asr.language_probability >= 0.9 else None)
 
         return Ladder(run, LadderDeps(
             translator=self.translator, transcribe=transcribe,
