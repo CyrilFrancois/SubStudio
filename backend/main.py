@@ -27,6 +27,7 @@ from core.muxer import VideoMuxer
 from core.provenance import substudio_track_title
 from core.events import event_manager, setup_logging_bridge
 from core.jobs import job_registry, JobAborted
+from api import router as api_router
 
 # /data inside Docker; set SUBSTUDIO_MEDIA_ROOT (e.g. C:/Videos) when the backend runs natively.
 MEDIA_ROOT = os.getenv("SUBSTUDIO_MEDIA_ROOT", "/data")
@@ -310,6 +311,8 @@ async def lifespan(app: FastAPI):
 
 # --- API ---
 app = FastAPI(title="SubStudio Pro", lifespan=lifespan)
+
+app.include_router(api_router)
 
 app.add_middleware(
     CORSMiddleware,

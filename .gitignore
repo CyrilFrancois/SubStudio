@@ -25,3 +25,6 @@ _archive/
 .pytest_cache/
 bench/clips/
 bench/clips.local.json
+
+# UI API state (settings.json)
+backend/state/
