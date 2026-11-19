@@ -50,7 +50,7 @@ class VideoJob(BaseModel):
     stripExistingSubs: bool = False
 
 class GlobalOptions(BaseModel):
-    transcriptionEngine: str = "medium"
+    transcriptionEngine: str = "turbo"
     generateSRT: bool = True
     muxIntoMkv: bool = True
     cleanUp: bool = False
@@ -64,7 +64,7 @@ class ProcessRequest(BaseModel):
 class PipelineOrchestrator:
     def __init__(self):
         self.scanner = VideoScanner(base_path=MEDIA_ROOT)
-        self.transcriber = VideoTranscriber(model_size="medium")
+        self.transcriber = VideoTranscriber()
         self.translator = GeminiTranslator()
         self.muxer = VideoMuxer()
         
@@ -233,7 +233,7 @@ class PipelineOrchestrator:
 
             if cues is None:
                 event_manager.emit(fid, "processing", 15, f"{p} Transcribing with Whisper...")
-                srt_text = await asyncio.to_thread(
+                asr = await asyncio.to_thread(
                     self.transcriber.transcribe,
                     video_path=video.path,
                     file_id=fid,
@@ -241,12 +241,10 @@ class PipelineOrchestrator:
                     current_file=index + 1,
                     total_files=total,
                     model_size=opts.transcriptionEngine,
-                    context_prompt=context,
                     job=job
                 )
-                cues = parse(srt_text, "srt")
-                if not cues:
-                    raise RuntimeError("Transcription produced no subtitle (no speech detected?)")
+                # The transcriber raises a named error on no speech, so an empty list cannot reach here.
+                cues = asr.to_cues()
 
             # STEP 3: SYNC
             if video.syncOffset != 0:
