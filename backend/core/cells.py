@@ -77,6 +77,9 @@ class Cell:
     # A person saved these cues in the Review screen (api/subtitles): written back with the reviewed tag, so a
     # retry of another language that rebuilds the file keeps it. Cleared when the cell is made again.
     reviewed: bool = False
+    # Source ids of the cues the translator kept refusing, left in the source language (produce_cell): written to
+    # the file's UNTRANSLATED_TAG with the gate's own « same as the source » lines. Cleared when the cell is made again.
+    left_in_source: List[int] = field(default_factory=list)
 
     def to_json(self) -> dict:
         o = self.origin
@@ -144,6 +147,7 @@ def produce_cell(cell: Cell, source: Source, translator: Translator,
     Sets PASSED with its origin, or FAILED with the one-sentence reason. JobAborted propagates.
     With `cache` (core/artifacts), lines translated by an earlier run are reused and each batch is kept."""
     cell.state, cell.reason, cell.cues, cell.reviewed = CellState.RUNNING, "", None, False
+    cell.left_in_source = []
     if source.language == cell.language:
         rung = Rung.ASR if source.rung == Rung.ASR else Rung.EXISTING
         cell.cues, cell.origin, cell.state = source.cues, Origin(rung), CellState.PASSED
@@ -164,6 +168,7 @@ def produce_cell(cell: Cell, source: Source, translator: Translator,
         return
     if left:
         ids = sorted(left)
+        cell.left_in_source = ids
         cell.attempts.append(f"translate: {len(ids)} line{'s' if len(ids) > 1 else ''} left in "
                              f"{source.language or 'the source language'} (cue{'s' if len(ids) > 1 else ''} "
                              f"{', '.join(map(str, ids[:10]))}): {left[ids[0]][:120]}")

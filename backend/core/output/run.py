@@ -39,7 +39,9 @@ def write_run(run: VideoRun, job: Optional[JobHandle] = None) -> Optional[Output
         raise ValueError(f"passed cells without an origin: {[c.language for c in new if c.origin is None]}")
     # Lines still in the source language: the gate's own rule, so the file, the gate and Review agree.
     sources = {c.language: run.source_of(c.language) for c in new}
-    left = {lang: untranslated(src.cues, run.cells[lang].cues) for lang, src in sources.items() if src}
+    # Plus the cues the translator kept refusing, which may be too short for that rule (core/cells.produce_cell).
+    left = {lang: set(untranslated(src.cues, run.cells[lang].cues)) | set(run.cells[lang].left_in_source)
+            for lang, src in sources.items() if src}
     result = update_in_place(
         current_path(run),
         {c.language: c.cues for c in new},

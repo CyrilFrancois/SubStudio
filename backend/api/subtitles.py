@@ -192,12 +192,16 @@ def save_cue_list(orch, video_id: str, path: str, lang: str, body: CueList) -> C
         if cell is not None and cell.state == CellState.PASSED and cell.cues:
             cell.reviewed = True
             if all(m is not None for m in matched):
-                # Same cues, new text: keeps the source ids, so source_text still resolves.
+                # Same cues, new text: keeps the source ids, so source_text still resolves. A refused line whose
+                # text was changed is no longer left in the source language, so a rebuild must not list it again.
+                edited = {m.id for c, m in zip(track.cues, matched) if texts[c.id] != c.text}
+                cell.left_in_source = [i for i in cell.left_in_source if i not in edited]
                 cell.cues = [replace(m, text=texts[c.id]) for c, m in zip(track.cues, matched)] + cell.cues[len(matched):]
             else:
                 logger.warning("%s %s: the kept run no longer matches the file cue by cue; it now holds the file's "
                                "cues (source text lost for this cell)", Path(path).name, code)
                 cell.cues = new
+                cell.left_in_source = sorted(still_left)     # now in the file's numbering, like cell.cues
         run.output_path = str(result.path)
 
     new_path = str(result.path)

@@ -477,3 +477,19 @@ def test_the_check_refuses_a_file_whose_untranslated_tag_was_not_written(tmp_pat
     with pytest.raises(OutputError, match="SUBSTUDIO_UNTRANSLATED|SUBSTUDIO_FROM"):
         _upd(src, {"fr": LEFT}, ["en", "fr"], untranslated={"fr": {11}}, from_languages={"fr": "en"})
     assert _sha(src) == before and _no_temp(tmp_path)
+
+
+def test_a_short_line_the_translator_refused_is_listed_too(tmp_path):
+    # core/cells.produce_cell names the cues the model kept refusing (Cell.left_in_source); a short one is under the
+    # gate's 3-word rule, but it is still English in a French track.
+    from core.acquire.types import Rung
+    from core.cells import Cell, CellState, Origin, Source, VideoRun
+    from core.output import write_run
+    from core.subtitles import TranslationContext
+    en = [Cue(10, 500, 2000, "Hello to all of you."), Cue(11, 2500, 4000, "Run!")]
+    fr = [Cue(10, 500, 2000, "Bonjour à vous tous."), Cue(11, 2500, 4000, "Run!")]
+    cell = Cell("fr", CellState.PASSED, Origin(Rung.TRANSLATE, "en"), cues=fr)
+    cell.left_in_source = [11]
+    run = VideoRun(path=str(_mkv_with_sdh(tmp_path)), cells={"fr": cell},
+                   human={"en": Source(cues=en, rung=Rung.DOWNLOAD, language="en", context=TranslationContext())})
+    assert _sub_tags(write_run(run).path, "SubStudio fr")["SUBSTUDIO_UNTRANSLATED"] == "2"

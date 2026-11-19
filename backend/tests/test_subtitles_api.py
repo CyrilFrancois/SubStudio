@@ -254,3 +254,12 @@ def test_fixing_a_line_left_untranslated_in_review_removes_it_from_the_tag(tmp_p
     p2 = _video_with_left(tmp_path / "b")
     again = save_cue_list(_orch(), "v2", str(p2), "fr", _body(get_cue_list(_orch(), "v2", str(p2), "fr"), c1="Salut."))
     assert [c.untranslated_from for c in again.cues] == [None, "en", None]
+
+
+def test_fixing_a_refused_line_in_review_also_clears_it_from_the_run(tmp_path):
+    p = _video(tmp_path)
+    run = _run(p)
+    run.cells["fr"].left_in_source = [11]                     # « Au revoir. » was kept as the model refused it
+    orch = _orch(run)
+    save_cue_list(orch, "v1", str(p), "fr", _body(get_cue_list(orch, "v1", str(p), "fr"), c2="Salut, à plus."))
+    assert run.cells["fr"].left_in_source == []               # a retry rebuilding the file will not list it again
