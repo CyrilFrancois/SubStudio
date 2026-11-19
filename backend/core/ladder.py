@@ -5,9 +5,10 @@ there (rung 1), then ONE download call for every language still missing (rung 2)
 that is still open translate from a human subtitle that passed (rung 3), or, when no good subtitle exists anywhere,
 transcribe once and translate the transcript (rung 4). A machine translation is never the source of another one.
 
-The quality gate (task 7) plugs into `_existing` and `_download`: until it exists in code, a subtitle the current
-SubStudio did not make is « ignored » unless `count_existing` is on (CLAUDE.md « Phase »), and a download counts
-only when ffsubsync could match it to the audio.
+The quality gate (core/gate, `deps.gate`) judges every subtitle before it counts: an existing one (`_existing`), a
+download that ffsubsync could match to the audio (`_download`), and each translation or transcript (`_produce`). A
+rejected one falls through to the next rung with the gate's sentence. A subtitle the current SubStudio did not make
+is « ignored » only when `count_existing` is off; it is on by default (Cyril, 2026-11-19, D-0002).
 """
 import asyncio
 import hashlib

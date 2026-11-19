@@ -173,6 +173,7 @@ def test_backend_choice(monkeypatch):
     monkeypatch.delenv("TRANSLATOR", raising=False)
     assert make_translator().name.startswith("llamacpp:")
     monkeypatch.setenv("TRANSLATOR", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key-not-real")  # without one there is no Gemini translator (test_gemini)
     assert make_translator().name.startswith("gemini:")
     monkeypatch.setenv("TRANSLATOR", "openai")
     with pytest.raises(ValueError):
