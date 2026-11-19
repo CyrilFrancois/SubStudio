@@ -216,6 +216,7 @@ class PipelineOrchestrator:
             # STEP 2: SOURCE (Transcription or SRT Import) — from here on, a list of cues, never SRT text
             cues = None
             is_whisper = True
+            spoken_lang = None
 
             if video.workflowMode in ["srt", "hybrid"]:
                 potential_paths = []
@@ -245,6 +246,9 @@ class PipelineOrchestrator:
                 )
                 # The transcriber raises a named error on no speech, so an empty list cannot reach here.
                 cues = asr.to_cues()
+                # Whisper hears the language; text detection only guesses it. Trusted when Whisper is sure.
+                if asr.language_probability >= 0.9:
+                    spoken_lang = asr.language
 
             # STEP 3: SYNC
             if video.syncOffset != 0:
@@ -252,7 +256,7 @@ class PipelineOrchestrator:
                 cues = shift(cues, video.syncOffset)
 
             # STEP 4: ONE CELL PER LANGUAGE (D-0002) — each passes or fails alone, with its origin or its reason.
-            source_lang = detect_language(cues)
+            source_lang = spoken_lang or detect_language(cues)
             source = Source(
                 cues=cues, rung=Rung.ASR if is_whisper else Rung.TRANSLATE, language=source_lang,
                 context=TranslationContext(title=video.name, notes=context, source_is_asr=is_whisper,

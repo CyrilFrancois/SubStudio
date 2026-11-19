@@ -169,3 +169,22 @@ def test_an_abort_mid_cell_ends_it_failed_not_running():
     with pytest.raises(JobAborted):
         asyncio.run(orch._run_cell(run, "de", handle, "[t]"))
     assert (run.cells["de"].state, run.cells["de"].reason) == (CellState.FAILED, "cancelled by the user")
+
+
+def test_a_transcription_uses_the_language_whisper_heard(tmp_path):
+    # Two words are far too little for text detection; Whisper's own 0.97 decides: EN kept as « transcribed ».
+    from core.asr_result import AsrResult, AsrSegment, AsrWord
+    video = tmp_path / "short.mkv"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=10:duration=3",
+                    "-f", "lavfi", "-i", "sine=duration=3", "-c:v", "mpeg4", "-c:a", "aac", "-shortest", str(video)],
+                   check=True)
+    words = [AsrWord(0.5, 0.9, "Hello", 0.9), AsrWord(1.0, 1.4, "there.", 0.9)]
+    asr = AsrResult(model="fake", language="en", language_probability=0.97, duration=3.0, speech=[(0.5, 1.4)],
+                    segments=[AsrSegment(0.5, 1.4, "Hello there.", -0.2, 0.01, 1.1, words)])
+    orch = orchestrator(Tag())
+    orch.transcriber.transcribe = lambda **kw: asr
+    job = main.VideoJob(name=video.name, path=str(video), out=["en", "de"], workflowMode="whisper")
+    asyncio.run(orch.execute_pipeline(job, main.GlobalOptions(generateSRT=True, muxIntoMkv=False), 0, 1))
+    cells = {c["language"]: c for c in orch.runs[str(video)].to_json()}
+    assert cells["en"]["origin"] == "transcribed" and orch.translator.calls == ["de"]
+    assert cells["de"]["origin"] == "transcribed, translated from en"
