@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from .jobs import JobHandle, JobAborted
+from .provenance import substudio_track_title
 from .subtitles import Cue, drop_after, to_srt
 
 logger = logging.getLogger("SubStudio.Muxer")
@@ -112,7 +113,7 @@ class VideoMuxer:
                 out_stream_idx = existing_sub_count + index
                 iso_lang = self.lang_map.get(lang_code.lower(), lang_code.lower())
                 cmd += [f"-metadata:s:s:{out_stream_idx}", f"language={iso_lang}"]
-                cmd += [f"-metadata:s:s:{out_stream_idx}", f"title=AI {lang_code.upper()}"]
+                cmd += [f"-metadata:s:s:{out_stream_idx}", f"title={substudio_track_title(lang_code.lower())}"]
 
             cmd += [str(output_path)]
 
