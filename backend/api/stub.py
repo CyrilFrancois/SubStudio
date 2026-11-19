@@ -12,7 +12,8 @@ from .events_hub import hub
 from .schemas import (Cue, CueList, Job, JobCreate, JobCreateResponse, JobEvent, LibraryResponse,
                       LogEvent, StageProgress)
 
-STAGES = ("check", "download", "transcribe", "correct", "translate", "write")
+# No « correct »: speech-to-text ships without a correction pass (D-0005), so no job ever reports it.
+STAGES = ("check", "download", "transcribe", "translate", "write")
 TICK_S = 0.5
 TICKS_PER_STAGE = 8
 
@@ -36,7 +37,7 @@ class StubJobs:
             if v is None:
                 skipped.append(vid)
                 continue
-            missing = [c.language for c in v.coverage if c.state in ("missing", "failed", "unknown")]
+            missing = [c.language for c in v.coverage if c.state in ("missing", "unchecked", "failed", "unknown")]
             langs = req.languages if req.languages is not None else missing
             busy = {j.video_id for j in self.jobs.values() if j.state in ("queued", "running")}
             if not langs or vid in busy:

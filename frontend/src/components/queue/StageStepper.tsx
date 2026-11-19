@@ -1,4 +1,4 @@
-// StageStepper.tsx — One job's stages (check → download → transcribe → correct → translate → write), each with its own bar. Exports: default StageStepper, eta.
+// StageStepper.tsx — One job's stages as the backend reports them (check → download → transcribe → translate → write; « correct » only if a job ever reports it, D-0005), each with its own bar. Exports: default StageStepper, eta.
 "use client";
 
 import { AlertCircle, Check, Circle, Loader2, MinusCircle } from 'lucide-react';
