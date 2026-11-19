@@ -53,11 +53,12 @@ correct fix that makes the workflow worse is still wrong.
   first; **in sync, they are English references and the quality gate must ACCEPT them** (rung 1: file left as is for
   English).
 - **Every pre-existing subtitle is evaluated, never trusted blindly,** embedded tracks AND sidecars (the old SubStudio
-  wrote `{stem}.{lang}.srt` by default): the quality gate (`doc/user-process.md` §3) decides. Until the gate exists in
-  code, the setting `count_existing` (« Count subtitles not made by this SubStudio ») stays OFF by default: such a
-  subtitle then never counts as coverage, never makes the planner skip a language; the UI shows the language as
-  missing with « ignored: <lang> <embedded|sidecar> ». The bench may still use a track as a reference once its timing
-  is checked against the audio.
+  wrote `{stem}.{lang}.srt` by default): the quality gate (`doc/user-process.md` §3, `backend/core/gate`) decides.
+  **`count_existing` is ON by default (Cyril, 2026-11-19: « Yes, keep them when the check passes »):** a pre-existing
+  subtitle counts only when the gate passes it, and the file then stays as it is for that language; a rejected one
+  is recorded with the gate's reason and the language falls through to download, translate or ASR. Measured on
+  `C:\Videos`: 16 of the 17 English tracks pass; S05E21 (timing drifts 0.6 s) gets new English. Turning the setting
+  OFF ignores every pre-existing subtitle (« ignored: <lang> <embedded|sidecar> »).
   What the new SubStudio writes is recognised by ONE rule, `backend/core/provenance.py` (muxed track title
   « SubStudio {lang} », sidecars listed in the per-video manifest), and does count.
 - **Forbidden:** `cleanUp=true`, or deleting or overwriting any source video by any path other than the **verified
