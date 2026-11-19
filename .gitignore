@@ -10,6 +10,7 @@ node_modules/
 .next/
 
 # Python
+.venv/
 __pycache__/
 *.py[cod]
 
