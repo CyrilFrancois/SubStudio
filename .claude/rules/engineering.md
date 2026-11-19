@@ -14,13 +14,17 @@ in `SubStudio/CLAUDE.md` or `SubStudio/.claude/rules/*.md`. Map: `doc/harness-mi
 ### The commands that actually exist here
 
 ```bash
+# Free RAM is the shared limit (STEWARD, 2026-11-19, workspace doc/04): next build, a whole-project tsc and the
+# full test suite wait behind model runs through the heavy lease. Single test files and reads stay free.
+H="python3 -I C:/Users/cyril/Documents/Workspace/doc/_tools/threads.py with heavy --"
+
 # Frontend — natively (Node at C:\Users\cyril\tools\node, 2026-11-19), from frontend/
-npx tsc --noEmit
-npx next build            # NEXT_PUBLIC_API_URL is baked in here, not read at run time
+$H npx tsc --noEmit
+$H npx next build         # NEXT_PUBLIC_API_URL is baked in here, not read at run time
 npm run check:types       # fails when src/lib/api.gen.ts no longer matches backend/api (npm run gen:types)
 
 # Backend — from the repo root, in the worktree's venv (pytest.ini sets the paths)
-.venv/Scripts/python.exe -m pytest -q
+$H .venv/Scripts/python.exe -m pytest -q
 python -c "import ast; ast.parse(open('backend/main.py',encoding='utf-8').read())"
 
 # Runtime
