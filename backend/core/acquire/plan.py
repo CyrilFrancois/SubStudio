@@ -1,12 +1,12 @@
-# plan.py — choose the subtitle-ladder rung for each wanted language from what the file already carries. Exports: plan, normalize_language.
+# plan.py — Cyril's subtitle ladder per language (OV first): which rungs to try, in order, for one video. Exports: plan, normalize_language, OV_TAGS.
 from typing import Iterable, List, Optional
 
 from babelfish import Language, LanguageConvertError, LanguageReverseError
 
 from .types import ExistingSub, LanguagePlan, Rung, Step
 
-# Downloaded to translate from when the original language is unknown: the language most subtitles exist in.
-_FALLBACK_SOURCE = "en"
+# What a user (or the remembered setting) writes for « Original Version »: the audio's own language.
+OV_TAGS = {"ov", "vo", "original", "original version", "version originale"}
 
 
 def normalize_language(code: Optional[str]) -> Optional[str]:
@@ -35,51 +35,61 @@ def normalize_language(code: Optional[str]) -> Optional[str]:
     return None
 
 
+def _resolve_wanted(wanted: Iterable[str], original: Optional[str]) -> List[str]:
+    langs: List[str] = []
+    for raw in wanted:
+        if raw and raw.strip().lower() in OV_TAGS:
+            if original is None:
+                # Never guess the audio language: the caller detects it (stream tag, else ASR on a sample) first.
+                raise ValueError("OV asked but the audio language is unknown: detect it before planning")
+            lang = original
+        else:
+            lang = normalize_language(raw)
+            if lang is None:
+                raise ValueError(f"unknown target language: {raw!r}")
+        if lang not in langs:  # « OV can already be in English »: OV and EN are then one track
+            langs.append(lang)
+    return langs
+
+
 def plan(wanted: Iterable[str], existing: Iterable[ExistingSub], original_language: Optional[str] = None,
          downloads_enabled: bool = True, count_existing: bool = False) -> List[LanguagePlan]:
-    """One LanguagePlan per wanted language: the ordered rungs to try, the first one being the plan.
+    """Per language, the ordered steps of Cyril's ladder (doc/user-process.md §2); each result is gated, and a
+    failure falls to the next step. `wanted` may hold « OV » (the audio language, `original_language`).
 
-    Raises ValueError for a wanted language that cannot be named, rather than planning a track nobody can tag.
+    Plans come OV first, then the wanted languages in the user's order, then source-only ones (not asked for, run
+    only to give TRANSLATE a human source): the executor runs rungs 1–2 for every language before any rung 3.
+    Raises ValueError for a language that cannot be named, rather than planning a track nobody can tag.
     """
-    # Subtitles already there are untrusted by default: an older SubStudio wrote bad muxed tracks (« AI FR ») and
+    # Subtitles already there are not considered by default: an older SubStudio wrote bad muxed tracks (« AI FR ») and
     # plain {stem}.{lang}.srt sidecars that nothing tells apart from a release's own (Cyril, 2026-11-19). Only what
-    # the current SubStudio marked (`marked`, from core/provenance.is_substudio_track), or everything once the user
-    # turns on Settings.count_existing, may satisfy a language or feed its translation: a subtitle judged bad is not
-    # a good translation source either.
-    existing = [s for s in existing if s.marked or count_existing]
+    # the current SubStudio marked (core/provenance.is_substudio_track), or everything once Settings.count_existing
+    # is on, is evaluated. user-process.md §3: count_existing stays off until the gate is shown to reject the old ones.
+    existing = [s for s in existing if (s.marked or count_existing) and s.language]
     original = normalize_language(original_language)
+    wanted_langs = _resolve_wanted(wanted, original)
+
+    extra: List[str] = []
+    if original and original not in wanted_langs:
+        extra.append(original)  # a human OV subtitle is the best translation source even when OV is not wanted
+    extra += [s.language for s in existing if s.text and s.language not in wanted_langs and s.language not in extra]
+    ordered = [l for l in [original] if l] + [l for l in wanted_langs + extra if l != original]
+
     plans: List[LanguagePlan] = []
-    seen = set()
-    for raw in wanted:
-        lang = normalize_language(raw)
-        if lang is None:
-            raise ValueError(f"unknown target language: {raw!r}")
-        if lang in seen:
-            continue
-        seen.add(lang)
-
-        have = [s for s in existing if s.language == lang]
-        if have:
-            # A text track beats a bitmap one as the reported source: it can be edited and re-timed.
-            have.sort(key=lambda s: (not s.text, s.kind != "sidecar"))
-            plans.append(LanguagePlan(lang, [Step(Rung.EXISTING, lang, source=have[0])]))
-            continue
-
+    for lang in ordered:
+        source_only = lang not in wanted_langs
         steps: List[Step] = []
-        if downloads_enabled:
+        # A text subtitle before a bitmap one: it can be re-timed, checked and translated.
+        for s in sorted((s for s in existing if s.language == lang), key=lambda s: (not s.text, s.kind != "sidecar")):
+            if s.text or not source_only:
+                steps.append(Step(Rung.EXISTING, lang, source=s))
+        if downloads_enabled and (not source_only or lang == original):
             steps.append(Step(Rung.DOWNLOAD, lang))
-
-        # Rung 3: a human text track in another language, the original language first (it is what was spoken,
-        # so it carries the least drift), then any named language, then an untagged one.
-        sources = [s for s in existing if s.text and s.language != lang]
-        sources.sort(key=lambda s: (s.language != original or original is None, s.language is None))
-        if sources:
-            steps.append(Step(Rung.TRANSLATE, lang, source=sources[0]))
-        elif downloads_enabled:
-            src = original or _FALLBACK_SOURCE
-            if src != lang:
-                steps.append(Step(Rung.TRANSLATE, lang, download_language=src))
-
-        steps.append(Step(Rung.ASR, lang))
-        plans.append(LanguagePlan(lang, steps))
+        if not source_only:
+            froms = tuple(l for l in ordered if l != lang)
+            if froms:
+                steps.append(Step(Rung.TRANSLATE, lang, from_languages=froms))
+            steps.append(Step(Rung.ASR, lang))
+        if steps:
+            plans.append(LanguagePlan(lang, steps, is_ov=lang == original, source_only=source_only))
     return plans
