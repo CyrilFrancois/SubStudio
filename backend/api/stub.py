@@ -12,7 +12,8 @@ from .events_hub import hub
 from .schemas import (Cue, CueList, Job, JobCreate, JobCreateResponse, JobEvent, LibraryResponse,
                       LogEvent, StageProgress)
 
-STAGES = ("check", "download", "transcribe", "correct", "translate", "write")
+# No « correct »: speech-to-text ships without a correction pass (D-0005), so no job ever reports it.
+STAGES = ("check", "download", "transcribe", "translate", "write")
 TICK_S = 0.5
 TICKS_PER_STAGE = 8
 
@@ -30,19 +31,20 @@ class StubJobs:
     def create(self, req: JobCreate, library: Optional[LibraryResponse]) -> JobCreateResponse:
         videos = {v.id: v for v in (library.videos if library else [])}
         created, skipped = [], []
+        batch = f"stub-batch-{next(self._ids)}"
         for vid in req.video_ids:
             v = videos.get(vid)
             if v is None:
                 skipped.append(vid)
                 continue
-            missing = [c.language for c in v.coverage if c.state in ("missing", "failed", "unknown")]
+            missing = [c.language for c in v.coverage if c.state in ("missing", "unchecked", "failed", "unknown")]
             langs = req.languages if req.languages is not None else missing
             busy = {j.video_id for j in self.jobs.values() if j.state in ("queued", "running")}
             if not langs or vid in busy:
                 skipped.append(vid)
                 continue
             job = Job(id=f"stub-{next(self._ids)}", video_id=vid, video_name=v.name, languages=langs,
-                      state="queued", stages=[StageProgress(stage=s, state="pending") for s in STAGES],
+                      state="queued", batch_id=batch, stages=[StageProgress(stage=s, state="pending") for s in STAGES],
                       created_at=_now())
             self.jobs[job.id] = job
             created.append(job)

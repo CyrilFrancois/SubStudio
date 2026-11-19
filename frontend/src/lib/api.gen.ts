@@ -200,6 +200,11 @@ export interface components {
         /** Job */
         Job: {
             /**
+             * Batch Id
+             * @description Same for every job one POST /api/jobs created: the Queue's overall bar counts them together.
+             */
+            batch_id?: string | null;
+            /**
              * Created At
              * Format: date-time
              */
@@ -345,7 +350,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "passed" | "missing" | "pending" | "running" | "failed" | "unknown";
+            state: "passed" | "missing" | "unchecked" | "pending" | "running" | "failed" | "unknown";
         };
         /**
          * LibraryChangedEvent

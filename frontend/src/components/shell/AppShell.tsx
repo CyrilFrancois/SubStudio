@@ -10,6 +10,7 @@ import type { SystemStatus } from '@/lib/types';
 
 const NAV = [
   { href: '/', label: 'Library', icon: Library },
+  { href: '/queue', label: 'Queue', icon: ListOrdered },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];
 
@@ -51,18 +52,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               </li>
             );
           })}
-          <li>
-            <span
-              title="The queue arrives with the job store (next phase)"
-              className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-gray-600 cursor-not-allowed"
-            >
-              <ListOrdered size={16} /> Queue <span className="ml-auto text-[11px]">soon</span>
-            </span>
-          </li>
           <li className="pt-4 mt-4 border-t border-white/5">
             <Link
               href="/legacy"
-              title="The previous dashboard: the only way to process videos until the queue lands"
+              title="The previous dashboard, kept until the Review screen replaces its last uses"
               className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-colors ${
                 path.startsWith('/legacy') ? 'bg-white/5 text-gray-200' : 'text-gray-500 hover:text-gray-300'}`}
             >

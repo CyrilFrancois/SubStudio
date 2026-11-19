@@ -14,8 +14,9 @@ LanguageCode = str
 
 # What a cell of the coverage matrix says about one (video, wanted language).
 # Cell vocabulary shared with core/cells.py (workspace-6e): pending | running | passed | failed, plus what only
-# a scan can say: "missing" (nothing usable yet) and "unknown" (ffprobe failed, a track may be unseen).
-CoverageState = Literal["passed", "missing", "pending", "running", "failed", "unknown"]
+# a scan can say: "missing" (nothing usable yet), "unchecked" (a subtitle SubStudio did not make is there, but the
+# quality gate has not judged it yet: D-0002, it never counts before) and "unknown" (ffprobe failed, a track may be unseen).
+CoverageState = Literal["passed", "missing", "unchecked", "pending", "running", "failed", "unknown"]
 # The ladder rung that produced a passed cell (core/acquire/types.Rung values).
 Rung = Literal["existing", "download", "translate", "asr"]
 # How a present subtitle was obtained (D-0002 §3; core/provenance.ORIGINS), or "existing" when it
@@ -113,6 +114,7 @@ class Job(BaseModel):
     video_name: str
     languages: List[LanguageCode]
     state: JobState
+    batch_id: Optional[str] = Field(None, description="Same for every job one POST /api/jobs created: the Queue's overall bar counts them together.")
     position: Optional[int] = Field(None, description="Place in the queue (0 = next); null once started.")
     stages: List[StageProgress]
     created_at: datetime

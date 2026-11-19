@@ -132,6 +132,18 @@
       },
       "Job": {
         "properties": {
+          "batch_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Same for every job one POST /api/jobs created: the Queue's overall bar counts them together.",
+            "title": "Batch Id"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -473,6 +485,7 @@
             "enum": [
               "passed",
               "missing",
+              "unchecked",
               "pending",
               "running",
               "failed",

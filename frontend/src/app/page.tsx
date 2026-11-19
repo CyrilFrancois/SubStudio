@@ -26,6 +26,11 @@ function overlay(cov: LanguageCoverage[], videoId: string, jobs: Job[]): Languag
   });
 }
 
+// OV of an untagged video is « not detected yet » (the job detects it), not missing: the chip says so too.
+function isMissing(c: LanguageCoverage): boolean {
+  return c.state === 'missing' && !(c.language === 'ov' && !c.resolved);
+}
+
 export default function LibraryPage() {
   const [lib, setLib] = useState<LibraryResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -63,7 +68,8 @@ export default function LibraryPage() {
     return rows.filter(({ video, coverage }) => {
       if (q && !`${video.folder}/${video.name}`.toLowerCase().includes(q)) return false;
       if (filter === 'todo') return !video.validated;
-      if (filter.startsWith('missing:')) return coverage.some(c => c.language === filter.slice(8) && c.state === 'missing');
+      if (filter.startsWith('missing:')) return coverage.some(c => c.language === filter.slice(8) && isMissing(c));
+      if (filter === 'unchecked') return coverage.some(c => c.state === 'unchecked');
       if (filter === 'failed') return coverage.some(c => c.state === 'failed' || c.state === 'unknown');
       if (filter === 'active') return coverage.some(c => c.state === 'pending' || c.state === 'running');
       return true;
@@ -110,7 +116,9 @@ export default function LibraryPage() {
   };
 
   const languages = lib?.languages ?? [];
-  const missingCount = (lang: string) => rows.filter(r => r.coverage.some(c => c.language === lang && c.state === 'missing')).length;
+  const missingCount = (lang: string) => rows.filter(r => r.coverage.some(c => c.language === lang && isMissing(c))).length;
+  // Existing subtitles count only once checked (D-0002): neither missing nor present, so said apart.
+  const uncheckedCount = rows.filter(r => r.coverage.some(c => c.state === 'unchecked')).length;
   const selectedRows = rows.filter(r => selected.has(r.video.id));
   // Validated videos are skipped by Start (D-0002 §5): never sent, and said so.
   const toStart = selectedRows.filter(r => !r.video.validated).map(r => r.video.id);
@@ -127,6 +135,7 @@ export default function LibraryPage() {
                 <>
                   <span title={lib.root}>{lib.videos.length} videos</span>
                   {languages.map(l => <span key={l}> · {languageName(l)} missing on {missingCount(l)}</span>)}
+                  {uncheckedCount > 0 && <span> · existing subtitles not checked yet on {uncheckedCount}</span>}
                   {' · '}scanned {new Date(lib.scanned_at).toLocaleTimeString()}
                   {connection === 'lost' && (
                     <span role="status" className="text-amber-300">
@@ -170,6 +179,7 @@ export default function LibraryPage() {
               <option value="all">All videos</option>
               <option value="todo">Not validated yet</option>
               {languages.map(l => <option key={l} value={`missing:${l}`}>Missing {languageName(l)}</option>)}
+              <option value="unchecked">Existing subtitles not checked yet</option>
               <option value="failed">Failed or unreadable</option>
               <option value="active">In the queue</option>
             </select>
@@ -224,6 +234,9 @@ export default function LibraryPage() {
           <div role="status" className={`flex items-center gap-2 text-sm min-w-0 ${notice.tone === 'ok' ? 'text-emerald-300' : 'text-red-300'}`}>
             {notice.tone === 'ok' ? <CheckCircle2 size={16} aria-hidden /> : <AlertCircle size={16} aria-hidden />}
             <span className="truncate" title={notice.text}>{notice.text}</span>
+            {notice.tone === 'ok' && (
+              <Link href="/queue" className="shrink-0 underline underline-offset-2 hover:text-emerald-200">Open the Queue</Link>
+            )}
             <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss" title="Dismiss" className="text-gray-500 hover:text-gray-300">
               <X size={14} />
             </button>

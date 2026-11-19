@@ -1,7 +1,7 @@
 // CoverageChip.tsx — One cell of the coverage matrix: state as icon + text, never colour alone. Exports: default CoverageChip, coverageLabel.
 "use client";
 
-import { AlertCircle, Check, Clock, HelpCircle, Loader2, Minus } from 'lucide-react';
+import { AlertCircle, Check, CircleDashed, Clock, HelpCircle, Loader2, Minus } from 'lucide-react';
 import type { CoverageOrigin, LanguageCoverage } from '@/lib/types';
 import { languageName } from '@/lib/languages';
 
@@ -9,6 +9,7 @@ import { languageName } from '@/lib/languages';
 const STYLE: Record<LanguageCoverage['state'], string> = {
   passed: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/25',
   missing: 'bg-white/[0.03] text-gray-400 border-white/10',
+  unchecked: 'bg-white/[0.03] text-gray-300 border-dashed border-white/20',
   pending: 'bg-indigo-500/10 text-indigo-300 border-indigo-500/25',
   running: 'bg-indigo-500/15 text-indigo-200 border-indigo-400/40',
   failed: 'bg-red-500/10 text-red-300 border-red-500/30',
@@ -27,7 +28,9 @@ const ORIGIN: Record<CoverageOrigin, string> = {
 export function coverageLabel(c: LanguageCoverage): string {
   switch (c.state) {
     case 'passed': return c.origin ? ORIGIN[c.origin] : 'SubStudio';
-    case 'missing': return 'missing';
+    // OV of a video whose audio is untagged: the job detects it, so nothing can be said missing yet.
+    case 'missing': return c.language === 'ov' && !c.resolved ? 'language not detected yet' : 'missing';
+    case 'unchecked': return 'not checked yet';
     case 'pending': return 'queued';
     case 'running': return 'running';
     case 'failed': return 'failed';
@@ -40,6 +43,7 @@ function Icon({ state }: { state: LanguageCoverage['state'] }) {
   switch (state) {
     case 'passed': return <Check {...p} />;
     case 'missing': return <Minus {...p} />;
+    case 'unchecked': return <CircleDashed {...p} />;
     case 'pending': return <Clock {...p} />;
     case 'running': return <Loader2 {...p} className="animate-spin" />;
     case 'failed': return <AlertCircle {...p} />;
@@ -54,6 +58,7 @@ function tooltip(c: LanguageCoverage): string {
   const base = {
     passed: `${lang} subtitles ${c.origin === 'existing' ? 'already there, counted but not checked' : `validated (${c.origin ? ORIGIN[c.origin] : 'made by SubStudio'}${c.from_language ? ` from ${languageName(c.from_language)}` : ''})`}${c.path ? `: ${c.path}` : ''}`,
     missing: `No usable ${lang} subtitles`,
+    unchecked: `${lang} subtitles are there but the quality check has not judged them yet, so they do not count`,
     pending: `${lang} is queued`,
     running: `${lang} is being made now`,
     failed: `${lang} failed`,
@@ -64,6 +69,7 @@ function tooltip(c: LanguageCoverage): string {
 
 export default function CoverageChip({ coverage }: { coverage: LanguageCoverage }) {
   const ignored = coverage.state === 'missing' && coverage.reason?.startsWith('ignored');
+  const rejected = coverage.state === 'missing' && coverage.reason?.startsWith('rejected');
   return (
     <span
       title={tooltip(coverage)}
@@ -75,6 +81,7 @@ export default function CoverageChip({ coverage }: { coverage: LanguageCoverage 
         <span className="font-mono text-[11px] opacity-70">{coverage.resolved.toUpperCase()}</span>
       )}
       {ignored && <span className="text-gray-500">· old ignored</span>}
+      {rejected && <span className="text-red-300">· old rejected</span>}
     </span>
   );
 }
