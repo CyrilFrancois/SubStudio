@@ -17,8 +17,12 @@ from core.scanner import VideoScanner
 from core.transcriber import VideoTranscriber
 from core.translator import GeminiTranslator
 from core.subtitles import TranslationContext, detect_language, load_file, parse, shift, to_srt, wrap_lines
-from core.cells import Cell, CellState, Source, VideoRun, produce_cell
-from core.acquire.types import Rung
+from core.cells import Cell, CellState, VideoRun
+from core.acquire import ExistingSub, plan
+from core.acquire.existing import audio_language, find_existing
+from core.acquire.plan import OV_TAGS
+from core.ladder import Ladder, LadderDeps
+from core.subtitle_processor import SubtitleProcessor
 from core.muxer import VideoMuxer
 from core.provenance import substudio_track_title
 from core.events import event_manager, setup_logging_bridge
@@ -67,7 +71,12 @@ class PipelineOrchestrator:
         self.transcriber = VideoTranscriber(model_size="medium")
         self.translator = GeminiTranslator()
         self.muxer = VideoMuxer()
-        
+        self.processor = SubtitleProcessor()
+        # Rung 2 asks subtitle sites over the network; SUBSTUDIO_DOWNLOADS=0 keeps a run (or the tests) offline.
+        self.downloads_enabled = os.getenv("SUBSTUDIO_DOWNLOADS", "1") != "0"
+        # « Count subtitles not made by this SubStudio » (CLAUDE.md « Phase »): OFF until the quality gate exists.
+        self.count_existing = False
+
         self.active_jobs: Set[str] = set()
         # The last run of each video, so one failed language can be retried without redoing its source.
         self.runs: Dict[str, VideoRun] = {}
@@ -107,9 +116,28 @@ class PipelineOrchestrator:
             logger.info("🏁 BATCH PROCESSING FINISHED")
             event_manager.emit("system_events", "batch_done", 100, "All tasks completed")
 
-    async def _run_cell(self, run: VideoRun, lang_code: str, job, p: str):
+    def _ladder(self, run: VideoRun, video: "VideoJob", opts: "GlobalOptions", job, p: str, index: int, total: int,
+                preloaded: Optional[Dict[str, list]] = None) -> Ladder:
+        def transcribe():
+            srt_text = self.transcriber.transcribe(
+                video_path=video.path, file_id=run.path, on_progress=event_manager.emit,
+                current_file=index + 1, total_files=total, model_size=opts.transcriptionEngine,
+                context_prompt=run.context.notes, job=job)
+            return parse(srt_text, "srt")
+
+        return Ladder(run, LadderDeps(
+            translator=self.translator, transcribe=transcribe,
+            load_embedded=lambda i: self.processor.extract_embedded_subs(video.path, i, job=job),
+            downloads_enabled=self.downloads_enabled, count_existing=self.count_existing,
+            preloaded=preloaded or {}, check_abort=job.raise_if_aborted,
+            progress=lambda status, pct, msg: event_manager.emit(run.path, status, pct, f"{p} {msg}")))
+
+    async def _run_cell(self, run: VideoRun, ladder: Ladder, lang_code: str, job, p: str):
         job.raise_if_aborted()
         cell = run.cells[lang_code]
+        if cell.state == CellState.PASSED:  # kept or downloaded at rungs 1–2: a human text, left as written
+            logger.info(f"✅ {p} {cell.summary()}")
+            return
         event_manager.emit(run.path, "translating", 50, f"{p} Step 4/5: {lang_code.upper()}...")
 
         def on_batch(done: int, total_cues: int):
@@ -118,8 +146,7 @@ class PipelineOrchestrator:
 
         cell.state = CellState.RUNNING
         event_manager.emit_cells(run.path, run.to_json())
-        await asyncio.to_thread(produce_cell, cell, run.source, self.translator,
-                                on_batch=on_batch, check_abort=job.raise_if_aborted)
+        await ladder.fill(lang_code, on_batch=on_batch)
         if cell.state == CellState.PASSED:
             cell.cues = wrap_lines(cell.cues, 50)
             logger.info(f"✅ {p} {cell.summary()}")
@@ -170,7 +197,11 @@ class PipelineOrchestrator:
         log_handler = setup_logging_bridge(fid)
         p = "[retry]"
         try:
-            await self._run_cell(run, lang_code, job, p)
+            cell = run.cells[lang_code]
+            # Rungs 1–2 ran for every language and their sources are kept: a retry redoes rungs 3–4 only.
+            cell.state, cell.reason, cell.cues = CellState.PENDING, "", None
+            cell.attempts = [a for a in cell.attempts if a.startswith(("existing", "download"))]
+            await self._run_cell(run, self._ladder(run, video, opts, job, p, 0, 1), lang_code, job, p)
             await self._write_outputs(run, video, opts, job, p, 0, 1)
             self._emit_outcome(run, p, video.name)
         except JobAborted:
@@ -182,6 +213,23 @@ class PipelineOrchestrator:
             self.active_jobs.discard(fid)
             job_registry.release(fid)
             logging.getLogger().removeHandler(log_handler)
+
+    @staticmethod
+    def _picked_sidecar(video: "VideoJob"):
+        """The sidecar the user chose (workflowMode srt/hybrid), loaded and shifted by his offset, or None.
+        An unreadable or empty one raises: it is never silently replaced by another rung."""
+        if video.workflowMode not in ("srt", "hybrid"):
+            return None
+        candidates = ([Path(video.selectedSrtPath)] if video.selectedSrtPath else []) + [Path(video.path).with_suffix(".srt")]
+        found = next((c for c in candidates if c.is_file()), None)
+        if found is None:
+            return None
+        logger.info(f"🔍 Using the chosen subtitle {found.name}")
+        cues = load_file(found)
+        if video.syncOffset:
+            logger.info(f"⏱️ Adjusting timing by {video.syncOffset}s")
+            cues = shift(cues, video.syncOffset)
+        return str(found), cues
 
     async def execute_pipeline(self, video: VideoJob, opts: GlobalOptions, index: int, total: int):
         fid = video.path
@@ -195,68 +243,45 @@ class PipelineOrchestrator:
         logger.info(f"{p} STARTING: {video.name}")
 
         try:
-            # A language the muxer cannot title must fail now, not after a 40-minute transcription.
-            if opts.muxIntoMkv:
-                for lang_code in video.out:
-                    substudio_track_title(lang_code.lower())
-
             # STEP 1: CONTEXT
             job.raise_if_aborted()
             event_manager.emit(fid, "processing", 5, f"{p} Step 1/5: Analyzing context...")
             context = await asyncio.to_thread(self.translator.get_context_profile, video.name)
 
-            # STEP 2: SOURCE (Transcription or SRT Import) — from here on, a list of cues, never SRT text
-            cues = None
-            is_whisper = True
+            # STEP 2: WHAT IS ALREADY THERE — tracks and sidecars, plus the sidecar the user picked (trusted: his
+            # choice), and the audio language that « OV » stands for.
+            existing = await asyncio.to_thread(find_existing, video.path)
+            preloaded: Dict[str, list] = {}
+            picked = await asyncio.to_thread(self._picked_sidecar, video)
+            if picked:
+                path, cues = picked
+                existing = [e for e in existing if e.ref != path] + [
+                    ExistingSub(detect_language(cues), "sidecar", path, marked=True)]
+                preloaded[path] = cues
+            original = await asyncio.to_thread(audio_language, video.path)
 
-            if video.workflowMode in ["srt", "hybrid"]:
-                potential_paths = []
-                if video.selectedSrtPath:
-                    potential_paths.append(Path(video.selectedSrtPath))
-                potential_paths.append(Path(video.path).with_suffix(".srt"))
-
-                found_path = next((p for p in potential_paths if p.exists() and p.is_file()), None)
-                if found_path:
-                    logger.info(f"🔍 Found SRT at: {found_path}")
-                    event_manager.emit(fid, "processing", 10, f"{p} Found SRT {found_path.name}")
-                    # An unreadable or empty sidecar raises: it is never silently replaced by a transcription.
-                    cues = await asyncio.to_thread(load_file, found_path)
-                    is_whisper = False
-
-            if cues is None:
-                event_manager.emit(fid, "processing", 15, f"{p} Transcribing with Whisper...")
-                srt_text = await asyncio.to_thread(
-                    self.transcriber.transcribe,
-                    video_path=video.path,
-                    file_id=fid,
-                    on_progress=event_manager.emit,
-                    current_file=index + 1,
-                    total_files=total,
-                    model_size=opts.transcriptionEngine,
-                    context_prompt=context,
-                    job=job
-                )
-                cues = parse(srt_text, "srt")
-                if not cues:
-                    raise RuntimeError("Transcription produced no subtitle (no speech detected?)")
-
-            # STEP 3: SYNC
-            if video.syncOffset != 0:
-                logger.info(f"⏱️ Adjusting timing by {video.syncOffset}s")
-                cues = shift(cues, video.syncOffset)
-
-            # STEP 4: ONE CELL PER LANGUAGE (D-0002) — each passes or fails alone, with its origin or its reason.
-            source_lang = detect_language(cues)
-            source = Source(
-                cues=cues, rung=Rung.ASR if is_whisper else Rung.TRANSLATE, language=source_lang,
-                context=TranslationContext(title=video.name, notes=context, source_is_asr=is_whisper,
-                                           source_lang=source_lang),
-            )
-            run = VideoRun(path=fid, source=source, cells={lang: Cell(lang) for lang in video.out})
+            # STEP 3: ONE PLAN AND ONE CELL PER LANGUAGE (D-0002) — each passes or fails alone, with its origin.
+            run = VideoRun(path=fid, cells={}, context=TranslationContext(title=video.name, notes=context))
+            ladder = self._ladder(run, video, opts, job, p, index, total, preloaded)
+            if original is None and any(o.strip().lower() in OV_TAGS for o in video.out):
+                original = (await ladder.asr()).language  # untagged audio: OV is what the transcript is in
+                if original is None:
+                    raise RuntimeError("The audio language could not be detected, so « OV » cannot be planned")
+            plans = plan(video.out, existing, original, downloads_enabled=self.downloads_enabled)
+            run.plans = {lp.language: lp for lp in plans}
+            run.cells = {lp.language: Cell(lp.language) for lp in plans if not lp.source_only}
+            # A language the muxer cannot title must fail now, not after a 40-minute transcription.
+            if opts.muxIntoMkv:
+                for lang_code in run.cells:
+                    substudio_track_title(lang_code)
             self.runs[fid] = run
             event_manager.emit_cells(fid, run.to_json())
-            for lang_code in video.out:
-                await self._run_cell(run, lang_code, job, p)
+
+            # STEP 4: RUNGS 1–2 FOR EVERY LANGUAGE, THEN 3–4 PER CELL
+            await ladder.human()
+            event_manager.emit_cells(fid, run.to_json())
+            for lang_code in run.cells:
+                await self._run_cell(run, ladder, lang_code, job, p)
 
             # STEP 5: OUTPUT — only the cells that passed
             await self._write_outputs(run, video, opts, job, p, index, total)

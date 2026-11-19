@@ -79,7 +79,8 @@ def test_each_language_gets_its_own_verdict_and_origin(clip):
     finally:
         restore()
     cells = {c["language"]: c for c in orch.runs[str(clip)].to_json()}
-    assert cells["en"] == {"language": "en", "state": "passed", "origin": "kept", "rung": "existing", "reason": ""}
+    assert cells["en"] == {"language": "en", "state": "passed", "origin": "kept", "rung": "existing", "reason": "",
+                           "attempts": []}
     assert cells["de"]["state"] == "passed" and cells["de"]["origin"] == "translated from en"
     assert cells["fr"]["state"] == "failed" and cells["fr"]["reason"].startswith("fr: tag cannot translate cue")
     assert orch.translator.calls.count("en") == 0          # already English: kept, never sent to a model

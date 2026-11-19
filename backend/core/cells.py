@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Dict, List, Optional
 
-from .acquire.types import Rung
+from .acquire.types import LanguagePlan, Rung
 from .subtitles import Cue, TranslationContext, TranslationFailed, Translator, translate_cues
 
 
@@ -59,11 +59,15 @@ class Cell:
     origin: Optional[Origin] = None
     reason: str = ""                                        # one sentence, only when FAILED
     cues: Optional[List[Cue]] = field(default=None, repr=False)
+    # One sentence per rung that was tried and fell through, in order (« existing: ignored: en embedded »), so a
+    # cell that passed at rung 3 still says why rungs 1–2 did not.
+    attempts: List[str] = field(default_factory=list)
 
     def to_json(self) -> dict:
         return {"language": self.language, "state": self.state.value,
                 "origin": self.origin.label() if self.origin else None,
-                "rung": self.origin.rung.value if self.origin else None, "reason": self.reason}
+                "rung": self.origin.rung.value if self.origin else None, "reason": self.reason,
+                "attempts": list(self.attempts)}
 
     def summary(self) -> str:
         if self.state == CellState.PASSED:
@@ -75,10 +79,13 @@ class Cell:
 
 @dataclass
 class VideoRun:
-    """Everything one video's cells need, kept in memory so one cell can be retried without redoing the source."""
+    """Everything one video's cells need, kept in memory so one cell can be retried without redoing its sources."""
     path: str
-    source: Source
     cells: Dict[str, Cell]
+    plans: Dict[str, LanguagePlan] = field(default_factory=dict)  # every plan, source-only ones included
+    human: Dict[str, Source] = field(default_factory=dict)        # language → a human subtitle that passed rung 1–2
+    asr: Optional[Source] = None                                  # the transcription, made at most once per run
+    context: TranslationContext = field(default_factory=TranslationContext)
 
     def passed(self) -> Dict[str, List[Cue]]:
         return {lang: c.cues for lang, c in self.cells.items() if c.state == CellState.PASSED}
