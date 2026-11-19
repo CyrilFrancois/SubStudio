@@ -1,1 +1,2 @@
-pytest
+# One list for test and bench dependencies: bench/requirements.txt (pinned).
+-r ../bench/requirements.txt
