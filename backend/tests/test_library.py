@@ -17,7 +17,7 @@ SRT = "1\n00:00:00,500 --> 00:00:02,000\nHello\n\n"
 
 
 def _mkv(path, *, audio_lang=None, subs=()):
-    """A 2-second MKV; subs = [(language, title, origin_tag_or_None)]."""
+    """A 2-second MKV; subs = [(language, title, origin_tag_or_None[, {extra tag: value}])]."""
     srt = path.parent / "s.srt"
     srt.write_text(SRT, encoding="utf-8")
     cmd = ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=64x36:rate=5:duration=2",
@@ -28,10 +28,12 @@ def _mkv(path, *, audio_lang=None, subs=()):
     cmd += ["-c:v", "libx264", "-c:a", "aac", "-c:s", "srt"]
     if audio_lang:
         cmd += ["-metadata:s:a:0", f"language={audio_lang}"]
-    for i, (lang, title, origin) in enumerate(subs):
+    for i, (lang, title, origin, *extra) in enumerate(subs):
         cmd += [f"-metadata:s:s:{i}", f"language={lang}", f"-metadata:s:s:{i}", f"title={title}"]
         if origin:
             cmd += [f"-metadata:s:s:{i}", f"SUBSTUDIO_ORIGIN={origin}"]
+        for k, v in (extra[0] if extra else {}).items():
+            cmd += [f"-metadata:s:s:{i}", f"{k}={v}"]
     subprocess.run(cmd + [str(path)], check=True)
     srt.unlink()
 
@@ -66,6 +68,13 @@ def test_gate_accepted_track_counts_as_kept_through_the_record(root, monkeypatch
     v = _scan(["ov", "en"])["ep.mkv"]
     assert _cells(v) == {"ov": ("passed", "kept", "en"), "en": ("passed", "kept", "en")}
     assert v.validated  # OV = EN: one track covers both columns
+
+
+def test_a_track_saved_in_review_shows_as_reviewed_and_others_do_not(root):
+    _mkv(root / "Film (Sub-EN,FR).mkv", audio_lang="eng",
+         subs=[("fre", "SubStudio fr", "translated", {"SUBSTUDIO_REVIEWED": "yes"}), ("eng", "SubStudio en", "transcribed")])
+    v = _scan(["fr", "en"])["Film (Sub-EN,FR).mkv"]
+    assert [(c.language, c.state, c.reviewed) for c in v.coverage] == [("fr", "passed", True), ("en", "passed", False)]
 
 
 def test_substudio_track_carries_its_origin(root):

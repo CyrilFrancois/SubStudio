@@ -125,3 +125,21 @@ def test_one_failed_language_does_not_fail_the_others(clip):
     probe = json.loads(subprocess.run(["ffprobe", "-v", "error", "-print_format", "json", "-show_streams",
                                        "-select_streams", "s", str(out)], capture_output=True, text=True).stdout)
     assert [s["tags"].get("language") for s in probe["streams"]] == ["eng"]
+
+
+@pytest.mark.parametrize("probability, tag", [(0.95, "fre"), (0.5, None)])
+def test_ov_detected_with_confidence_tags_the_untagged_audio(clip, probability, tag):
+    from types import SimpleNamespace
+    orch = main.PipelineOrchestrator()
+    orch.gate = lambda *a, **k: PASS
+    orch.translator = Upper()
+    # The clip's audio is an untagged tone: OV is « detected » as French, as Whisper would on real speech.
+    orch.transcriber = SimpleNamespace(detect_video_language=lambda path, job=None: ("fr", probability))
+    job = main.VideoJob(name=clip.name, path=str(clip), out=["ov", "en"], workflowMode="hybrid", syncOffset=0.25)
+    asyncio.run(orch.execute_pipeline(job, main.GlobalOptions(), 0, 1))
+    out = orch.runs[str(clip)].output_path
+    assert out, "the en translation should have been written"
+    audio = [s for s in json.loads(subprocess.run(["ffprobe", "-v", "error", "-print_format", "json", "-show_streams",
+                                                   out], capture_output=True).stdout)["streams"]
+             if s["codec_type"] == "audio"][0]
+    assert audio.get("tags", {}).get("language", None) in ((tag,) if tag else (None, "und"))

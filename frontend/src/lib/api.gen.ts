@@ -114,9 +114,18 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Subtitles */
+        /**
+         * Get Subtitles
+         * @description The video's SubStudio track in `lang` ('ov' = the audio's language): cues by position, with the text each was
+         *     translated from while the run that made it is still in memory.
+         */
         get: operations["get_subtitles_api_subtitles__video_id___lang__get"];
-        /** Put Subtitles */
+        /**
+         * Put Subtitles
+         * @description Saves the edited text of every cue (ids and timings must be the file's: 409 otherwise) by the verified swap,
+         *     and marks the track reviewed. Answers the saved list, checked again; the video id changes only if the file was
+         *     renamed. flags and limits in the body are ignored.
+         */
         put: operations["put_subtitles_api_subtitles__video_id___lang__put"];
         post?: never;
         delete?: never;
@@ -364,6 +373,12 @@ export interface components {
              */
             resolved?: string | null;
             /**
+             * Reviewed
+             * @description Set when state is 'passed' and a person saved this subtitle in Review.
+             * @default false
+             */
+            reviewed?: boolean;
+            /**
              * Rung
              * @description Set when known (from the job's cell verdict).
              */
@@ -605,6 +620,12 @@ export interface components {
              * @description One sentence when counted is false, e.g. 'not made by this SubStudio (Settings)'.
              */
             reason?: string | null;
+            /**
+             * Reviewed
+             * @description A person saved it in the Review screen (SUBSTUDIO_REVIEWED tag, core/provenance).
+             * @default false
+             */
+            reviewed?: boolean;
             /**
              * Stream Index
              * @description ffprobe stream index, embedded tracks only.

@@ -56,6 +56,12 @@ function Review() {
     return () => window.removeEventListener('beforeunload', warn);
   }, [changed]);
 
+  // Stable, so CueTable's memoised rows skip rendering on every other line's keystroke.
+  const onEdit = useCallback((id: number, t: string) => {
+    setEdits(p => ({ ...p, [id]: t }));
+    setSave({ state: 'idle' });
+  }, []);
+
   const counts = useMemo(() => {
     const m = new Map<CueFlag, number>();
     list?.cues.forEach(c => (c.flags ?? []).forEach(f => m.set(f, (m.get(f) ?? 0) + 1)));
@@ -74,6 +80,10 @@ function Review() {
       setList(saved);
       setEdits({});
       setSave({ state: 'saved' });
+      // A first save renames a file that had no (Sub-…) marker, and the video id follows its path: keep the URL true.
+      if (saved.video_id !== videoId) {
+        router.replace(`/review?video=${encodeURIComponent(saved.video_id)}&lang=${encodeURIComponent(lang)}`);
+      }
     } catch (e) {
       // Edits stay on screen: a failed save must never look like a saved one, nor lose the work.
       setSave({ state: 'error', message: (e as ApiError).message });
@@ -94,7 +104,7 @@ function Review() {
             <h1 className="text-lg font-semibold text-white truncate" title={title}>{title || 'Review'}</h1>
             {list && (
               <p className="text-xs text-gray-500 mt-0.5">
-                {list.cues.length} lines · {list.origin}{sourceLabel ? ` from ${sourceLabel}` : ''}
+                {list.cues.length} lines · {list.origin}{sourceLabel ? ` from ${sourceLabel}` : ''}{list.reviewed ? ' · reviewed' : ''}
                 {' · '}{flaggedLines ? `${flaggedLines} need a look` : 'nothing flagged'}
                 {FLAG_ORDER.filter(f => counts.get(f)).map(f => <span key={f}> · {flagCount(f, counts.get(f) ?? 0)}</span>)}
               </p>
@@ -145,7 +155,7 @@ function Review() {
             {shown.length === 0
               ? <p className="px-6 py-10 text-sm text-gray-400 flex items-center gap-2"><CheckCircle2 size={15} className="text-emerald-400" aria-hidden /> No line needs a look.</p>
               : <CueTable cues={shown} edits={edits} selected={selected} onSelect={setSelected}
-                          onEdit={(id, t) => { setEdits(p => ({ ...p, [id]: t })); setSave({ state: 'idle' }); }}
+                          onEdit={onEdit}
                           sourceLabel={sourceLabel} />}
           </div>
           <aside className="min-h-0 overflow-y-auto p-4">

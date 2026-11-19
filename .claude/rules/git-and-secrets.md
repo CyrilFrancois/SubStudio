@@ -99,6 +99,11 @@ Only the traps not (yet) in the workspace `windows-host.md` / `code-and-data.md`
   Bash call, killed that Bash call too (exit 255, the rest of the command never ran). Stop a server by its PID
   (record `$!` or the PID of the process listening on the port: `Get-NetTCPConnection -LocalPort N`), never by a
   command-line pattern; and lease the port first (`threads.py lease port-<n>`) so the PID can only be yours.
+- **A guard command is never piped.** `threads.py lease heavy | tail -1` hides the refusal AND its exit code (the
+  pipe returns `tail`'s 0), so on 2026-11-19 Whisper ran 83 s inside another thread's heavy lease. Run the lease on
+  its own and chain the work with `&&` (`threads.py lease heavy --minutes 30 && python -m bench...`). Same for a
+  PowerShell script deleting or replacing files: `-ErrorAction Stop` (or `$ErrorActionPreference = 'Stop'`), else a
+  failed step still exits 0 and the `&&` after it runs.
 - **A command that timed out into the background is still running.** Stop it; and a stopped task
   may not stop its script — long loops check a stop file, and you confirm nothing still writes.
 - **An interpreter that is found is not one that runs** — the Windows Store `python3` stub prints an

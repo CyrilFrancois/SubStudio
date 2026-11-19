@@ -138,7 +138,8 @@ def test_lines_left_in_the_source_language_are_caught_by_id():
     half_done = [replace(c, text=c.text if i % 5 == 0 else french[i % 4]) for i, c in enumerate(cues)]
     v = evaluate(half_done, speech, "fr", source=cues)
     assert [c.name for c in v.checks if not c.passed] == ["untranslated"]
-    assert v.reason.endswith("lines left in the source language")
+    left = [c.id for i, c in enumerate(cues) if i % 5 == 0]
+    assert v.reason.startswith(f"{len(left)} lines left in the source language (cues {left[0]}, {left[1]}")
     names = [replace(c, text="Jay !") for c in cues]  # under 3 words: the same in both languages, not a fault
     from core.gate.text import untranslated
     assert untranslated([replace(c, text="Jay !") for c in cues], names) == []

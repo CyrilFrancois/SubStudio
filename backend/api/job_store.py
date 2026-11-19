@@ -239,7 +239,9 @@ class JobStore:
         return self._publish(job_id)
 
     def finish(self, job_id: str, state: str, error: Optional[str] = None) -> Optional[Job]:
-        """done | failed | cancelled. Open stages close: running → done (or failed), pending → skipped."""
+        """done | failed | cancelled. Open stages close: running → done (or failed), pending → skipped. A stage
+        that reported 100 % is done whatever the job's end: S05E12 (2026-11-19) wrote EN, failed FR, and read
+        « write failed » although the file was written."""
         if state not in ("done", "failed", "cancelled"):
             raise ValueError(f"Not a final state: {state!r}")
         with self._lock:
@@ -250,6 +252,8 @@ class JobStore:
             for s in stages:
                 if s["state"] == "pending" and s["progress"] > 0 and state == "done":
                     s.update(state="done", progress=1.0, eta_s=None)   # paused by a later frame, then finished
+                elif s["state"] == "running" and s["progress"] >= 1.0:
+                    s.update(state="done", eta_s=None)
                 elif s["state"] == "running":
                     s.update(state="done" if state == "done" else "failed" if state == "failed" else "skipped",
                              eta_s=None, progress=1.0 if state == "done" else s["progress"])

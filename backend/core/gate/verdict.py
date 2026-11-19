@@ -111,5 +111,6 @@ def evaluate(cues: Sequence[Cue], speech: Sequence[Span], language: str, label: 
         left = untranslated(source, cues)
         checks.append(Check("untranslated", len(left), t["max_untranslated_share"],
                             len(left) / len(cues) <= t["max_untranslated_share"],
-                            f"{len(left)} lines left in the source language"))
+                            f"{len(left)} lines left in the source language (cues "
+                            f"{', '.join(map(str, left[:10]))}{', …' if len(left) > 10 else ''})"))
     return Verdict(all(c.passed for c in checks), checks)

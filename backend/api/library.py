@@ -14,7 +14,8 @@ from typing import Dict, List, Optional, Tuple
 
 import langcodes
 
-from core.provenance import ORIGIN_TAG, ORIGINS, OV, REJECTED, is_substudio_track, parse_name_marker, track_key
+from core.provenance import (ORIGIN_TAG, ORIGINS, OV, REJECTED, REVIEWED_TAG, REVIEWED_YES, is_substudio_track,
+                             parse_name_marker, track_key)
 
 from .config import MEDIA_ROOT
 from .schemas import LanguageCoverage, LibraryResponse, LibraryVideo, Settings, SubtitleTrack
@@ -185,7 +186,7 @@ def _embedded(probe: _Probe) -> List[SubtitleTrack]:
         tracks.append(SubtitleTrack(kind="embedded", language=_language(tag), language_tag=tag,
                                     stream_index=s.get("index"), codec=s.get("codec_name"),
                                     title=tags.get("TITLE"), origin=origin if origin in ORIGINS else None,
-                                    counted=False))
+                                    reviewed=(tags.get(REVIEWED_TAG) or "").lower() == REVIEWED_YES, counted=False))
     return tracks
 
 
@@ -258,7 +259,8 @@ def _coverage(wanted: str, audio: Optional[str], tracks: List[SubtitleTrack], pr
         # the contract for records written before the gate.
         best = next((t for t in counted if t.made_by_substudio), counted[0])
         origin = best.origin if best.made_by_substudio else "existing"
-        return LanguageCoverage(language=wanted, resolved=lang, state="passed", origin=origin, path=best.path)
+        return LanguageCoverage(language=wanted, resolved=lang, state="passed", origin=origin, path=best.path,
+                                reviewed=best.made_by_substudio and best.reviewed)
     if probe_error:
         # A track inside the video (ours included) may exist unseen: not « missing ».
         return LanguageCoverage(language=wanted, resolved=lang, state="unknown", reason=probe_error)
@@ -315,6 +317,19 @@ def scan_library(settings: Settings) -> LibraryResponse:
     _paths.update({v.id: v.path for v in videos})
     return LibraryResponse(root=MEDIA_ROOT, languages=settings.languages,
                            scanned_at=datetime.now(timezone.utc), videos=videos, warnings=warnings)
+
+
+def audio_language(path: str) -> Optional[str]:
+    """What « ov » stands for in this video: its first audio track's language tag, from the same cached probe as the
+    Library. None when untagged or unreadable. Blocking (ffprobe on a cache miss)."""
+    return _audio_language(_probe_cached(path, os.stat(path)))
+
+
+def remember(path: str) -> str:
+    """Registers a video a write just renamed (the swap's new marker), so its new id resolves before the next scan."""
+    vid = video_id(path)
+    _paths[vid] = path
+    return vid
 
 
 def video_path(vid: str) -> Optional[str]:

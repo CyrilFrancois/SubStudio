@@ -57,6 +57,8 @@ class LadderDeps:
     speech: Optional[Callable[[], Tuple[List[Tuple[int, int]], Optional[int]]]] = None
     check_abort: Callable[[], None] = lambda: None
     progress: Callable[[str, int, str], None] = lambda status, percent, message: None
+    # Finished work kept across retries and restarts (core/artifacts). None (tests): nothing is kept.
+    artifacts: Optional[Any] = None
 
 
 class Ladder:
@@ -221,7 +223,7 @@ class Ladder:
         """Translate (or keep, for a transcript in the cell's language) from `source`, wrap the lines as they will
         be written, then gate them. False with cell.reason set when either step fails."""
         await asyncio.to_thread(produce_cell, cell, source, self.deps.translator,
-                                on_batch=on_batch, check_abort=self.deps.check_abort)
+                                on_batch=on_batch, check_abort=self.deps.check_abort, cache=self.deps.artifacts)
         if cell.state != CellState.PASSED:
             return False
         # Wrapped at the gate's own line limit: one number, so SubStudio's wrapping can never fail its own gate.

@@ -14,13 +14,21 @@ in `SubStudio/CLAUDE.md` or `SubStudio/.claude/rules/*.md`. Map: `doc/harness-mi
 ### The commands that actually exist here
 
 ```bash
+# Memory-heavy jobs share ONE lease (Steward, 2026-11-19, workspace doc/04): a full pytest run (x3), `next build`,
+# and every model run go through `threads.py with heavy`; --min-free-mb waits for that much free RAM, else exits 3
+# without running. T="python3 -I C:/Users/cyril/Documents/Workspace/doc/_tools/threads.py"
+#   full suite x3 : $T with heavy --min-free-mb 1500 -- .venv/Scripts/python.exe -m pytest -q
+#   next build    : $T with heavy --min-free-mb 1500 -- npx next build
+#   Whisper turbo : --min-free-mb 2500 (estimate, not measured)   TranslateGemma 4B : --min-free-mb 4000 (D-0003: 3.9 GB peak)
+# A single test file and tsc stay free. Never pipe the `with` command: its refusal must stop the chain.
+
 # Frontend — natively (Node at C:\Users\cyril\tools\node, 2026-11-19), from frontend/
 npx tsc --noEmit
-npx next build            # NEXT_PUBLIC_API_URL is baked in here, not read at run time
+npx next build            # NEXT_PUBLIC_API_URL is baked in here, not read at run time (heavy lease, above)
 npm run check:types       # fails when src/lib/api.gen.ts no longer matches backend/api (npm run gen:types)
 
 # Backend — from the repo root, in the worktree's venv (pytest.ini sets the paths)
-.venv/Scripts/python.exe -m pytest -q
+.venv/Scripts/python.exe -m pytest -q                       # full suite: heavy lease, above
 python -c "import ast; ast.parse(open('backend/main.py',encoding='utf-8').read())"
 
 # Runtime
@@ -156,7 +164,10 @@ and lost on restart.
   clips, wraps and writes SRT; nothing else parses or prints a timestamp. `translate.py` holds the
   `Translator` contract (`translate([{id, text}], target, context) -> [{id, text}]`, no timing ever
   sent) and `translate_cues`, which batches, rejects an answer whose id set differs (retry once,
-  then split down to one cue), re-attaches timings by id, and raises `TranslationFailed`.
+  then split down to one cue), re-attaches timings by id, and raises `TranslationFailed`. A cue still wrong
+  ALONE stays in the source language, recorded in `left_in_source` and on the cell's `attempts` (`produce_cell`
+  passes it); over 10 % of the cues left (`MAX_ECHO_SHARE`) fails the language, and the gate's « untranslated »
+  check names the cues.
 - `backend/core/cells.py` — one `Cell` per video × language: `pending → running → passed | failed`, an
   `Origin` (`kept`, `downloaded`, `translated from en`, `transcribed`) or a one-sentence reason. A source already
   in the wanted language (detected) is kept, never translated. `VideoRun` keeps the source and every cell's cues
@@ -171,7 +182,11 @@ and lost on restart.
   `gemini` opt-in). `llamacpp.py` —
   `LlamaCppTranslator`, the default: TranslateGemma 4B Q4_K_M on a native llama.cpp server, 10 cues per
   call as `id|text` lines, prompt rendered from the model's own chat template (`/props`), a reply cut at
-  the token limit raises `BatchMismatch`. `llama_server.py` starts the server on the first batch
+  the token limit raises `BatchMismatch`. The reply parser reads the id with any separator or plain whitespace
+  (NBSP included) and joins an unnumbered line BETWEEN two answers to the one before (chatter before the first or
+  after the last is rejected); the id set check catches a merged cue. A
+  batch of ONE cue is sent as plain text with no id and must come back as the translation alone (one line, or one per
+  speaker), so the last step of a split never fails on the format; anything else is kept in the source language. `llama_server.py` starts the server on the first batch
   (`--threads 4`, all layers on the iGPU) and `unload()` (part of the contract) stops it after each video's
   translations, under a lock shared by batches and retries, so Whisper and the LLM are never loaded together
   (D-0001). The source language comes from `detect_language` or Whisper; unknown, the cell fails at once.
@@ -205,9 +220,8 @@ Screens of D-0002 / ux-review §2, built on the UI API (`backend/api`, below):
 - `src/lib/api.gen.ts` — **generated** from the backend's OpenAPI (`npm run gen:types`); `types.ts`
   only aliases it. Never hand-write a backend shape. `src/lib/api.ts` — REST client (every failure
   throws the backend's sentence). `src/lib/events.ts` — the one `GET /api/events` stream.
-- `src/app/legacy/page.tsx` + `src/legacy/` — the previous dashboard on `/api/process`, kept whole
-  until the queue screen and the job store exist; delete both together then. A page module exports
-  only the page: the App Router fails `next build` on any other export (hence `legacy/lib/studio-context.tsx`).
+- A page module exports only the page: the App Router fails `next build` on any other export. (The old
+  dashboard on `/api/process` was deleted on 2026-11-19 once Queue and Review covered it.)
 
 ### API contracts
 
@@ -228,7 +242,7 @@ Videos are addressed by `LibraryVideo.id` (hash of the path), never by the path 
 | `GET /api/library` | Every video under `SUBSTUDIO_MEDIA_ROOT` × every wanted language: `passed` (with origin) / `missing` / `unchecked` (a subtitle SubStudio did not make, not judged by the gate yet: it counts only once the job store's verdict record passes it, D-0002) / `pending` / `running` / `failed` / `unknown` (ffprobe failed). ffprobe cached by path+mtime+size. What counts as ours: `core/provenance.py`, the one rule. |
 | `GET/PUT /api/settings` | `{languages, count_existing}`, JSON under `SUBSTUDIO_STATE_DIR`, written atomically. |
 | `POST/GET /api/jobs`, `DELETE /api/jobs/{id}`, `GET /api/events` | The job store (SQLite) or, with `SUBSTUDIO_API_STUB=1`, simulated jobs. `/api/events` is one SSE stream, frames discriminated by `kind` (`job`, `log` with the backend's `ts`, `library`). |
-| `GET/PUT /api/subtitles/{id}/{lang}` | `CueList`; GET adds each line's `flags` and the gate's `limits` (`api/review.flag_cues`). Stub only for now (PUT never simulated); otherwise 501 until workspace-6e serves them from the job store (task 12). |
+| `GET/PUT /api/subtitles/{id}/{lang}` | `CueList`; GET adds each line's `flags` and the gate's `limits` (`api/review.flag_cues`). GET reads the video's « SubStudio <lang> » track (`api/subtitles.py`); `source_text` only while the run is in memory. PUT saves the text only, through the verified swap, tags the track `SUBSTUDIO_REVIEWED=yes` (the Library shows « reviewed »), and may rename a file that had no marker: the response's `video_id` is then the new one. 404/409/422/500 each carry one sentence. Stub: a sample, PUT not simulated. |
 | `GET /api/system` | `stub`, media root, CPU/RAM against the D-0001 budget. |
 
 **SSE frames are unnamed** — everything arrives on the default `message` event with a `type`
@@ -247,7 +261,7 @@ boolean, not a mode.
 `LLAMA_MODEL_PATH`, `LLAMA_GPU_LAYERS`, `LLAMA_PORT` (defaults under `%LOCALAPPDATA%\SubStudio\`);
 only with `TRANSLATOR=gemini`: `GEMINI_API_KEY`, optional `GEMINI_MODEL`
 (default `gemini-3.8-flash`; must be a 3.x model because the request sends `thinkingLevel`),
-`NEXT_PUBLIC_MEDIA_PATH`, `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_LANGUAGES` (legacy dashboard only),
+`NEXT_PUBLIC_MEDIA_PATH`, `NEXT_PUBLIC_API_URL`,
 `WHISPER_MODEL`. UI API: `SUBSTUDIO_MEDIA_ROOT` (default `/data`), `SUBSTUDIO_STATE_DIR` (default
 `backend/state`, gitignored; never inside the library), `SUBSTUDIO_API_STUB=1` (simulated jobs,
 the UI shows a banner).

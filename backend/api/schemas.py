@@ -43,6 +43,7 @@ class SubtitleTrack(BaseModel):
     made_by_substudio: bool = Field(False, description="Carries the SubStudio marker (core/provenance.py).")
     origin: Optional[Literal["kept", "downloaded", "translated", "transcribed"]] = Field(
         None, description="SubStudio tracks only: the SUBSTUDIO_ORIGIN stream tag, null when not recorded.")
+    reviewed: bool = Field(False, description="A person saved it in the Review screen (SUBSTUDIO_REVIEWED tag, core/provenance).")
     counted: bool = Field(..., description="True when this track counts as coverage for its language.")
     reason: Optional[str] = Field(None, description="One sentence when counted is false, e.g. 'not made by this SubStudio (Settings)'.")
 
@@ -55,6 +56,7 @@ class LanguageCoverage(BaseModel):
     rung: Optional[Rung] = Field(None, description="Set when known (from the job's cell verdict).")
     from_language: Optional[LanguageCode] = Field(None, description="For translated/transcribed+translated: the source language.")
     path: Optional[str] = Field(None, description="Sidecar path when the subtitle is a file.")
+    reviewed: bool = Field(False, description="Set when state is 'passed' and a person saved this subtitle in Review.")
     job_id: Optional[str] = Field(None, description="Set when state is queued/running/failed.")
     reason: Optional[str] = Field(None, description="One sentence: why it failed, why it is unknown, or what was ignored.")
 

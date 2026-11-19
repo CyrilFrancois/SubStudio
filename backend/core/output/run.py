@@ -3,7 +3,8 @@
 
 - tracks written  = every PASSED cell that is not « kept » (a kept subtitle is already in the file, unchanged);
 - marker          = every PASSED language, kept ones included, in the order of the cells;
-- origin per track = Cell.origin.kind() (downloaded | translated | transcribed), written as the ORIGIN_TAG.
+- origin per track = Cell.origin.kind() (downloaded | translated | transcribed), written as the ORIGIN_TAG;
+- reviewed tag     = the cells a person saved in the Review screen (Cell.reviewed), so a rebuild keeps the mark.
 
 A video whose passed cells are all « kept » is left exactly as it was: no write, no rename. After a swap the video
 has a new name; it is recorded on the run (VideoRun.output_path) so a retry rewrites the renamed file, never
@@ -38,6 +39,8 @@ def write_run(run: VideoRun, job: Optional[JobHandle] = None) -> Optional[Output
         {c.language: c.cues for c in new},
         [c.language for c in passed],
         origins={c.language: c.origin.kind() for c in new},
+        reviewed={c.language for c in new if c.reviewed},
+        audio_language=run.audio_tag,
         job=job,
     )
     if result.status == "updated":

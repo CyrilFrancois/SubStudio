@@ -58,6 +58,40 @@ def test_one_cue_the_model_never_returns_fails_the_language_by_name():
         run(fake)
 
 
+def test_one_cue_never_answered_stays_in_the_source_language_by_name_when_the_caller_accepts_it():
+    # Ghosts S05E12 FR: one cue of 513 failed the whole language after 45 minutes. A caller that passes
+    # left_in_source keeps the other cues; the one left is recorded with its reason, and keeps its own text.
+    fake = Fake(behave=lambda cues: [{"id": c["id"], "text": "x"} for c in cues if c["id"] != 6])
+    left = {}
+    out = run(fake, left_in_source=left)
+    assert [c.text for c in out] == ["x"] * 5 + ["line 6"] + ["x"] * 4
+    assert list(left) == [6] and "missing ids [6]" in left[6]
+
+
+def test_more_than_a_tenth_left_in_the_source_language_fails_the_language_by_name():
+    fake = Fake(behave=lambda cues: [{"id": c["id"], "text": "x"} for c in cues if c["id"] not in (2, 7)])
+    with pytest.raises(TranslationFailed, match=r"fr: fake left 2 of 10 cues untranslated \(cues 2, 7\)"):
+        run(fake, left_in_source={})
+
+
+def test_one_cue_left_on_a_short_file_does_not_cost_the_language():
+    short = CUES[:5]
+    fake = Fake(behave=lambda cues: [{"id": c["id"], "text": "x"} for c in cues if c["id"] != 3])
+    left = {}
+    out = translate_cues(short, "fr", CTX, fake, retry_delay_s=0, left_in_source=left)
+    assert [c.text for c in out] == ["x", "x", "line 3", "x", "x"] and list(left) == [3]
+
+
+def test_a_cue_left_in_the_source_language_is_never_cached_so_a_rerun_sends_it_again():
+    fake = Fake(behave=lambda cues: [{"id": c["id"], "text": "x"} for c in cues if c["id"] != 6])
+    saved = []
+    run(fake, left_in_source={}, on_texts=saved.append)
+    assert 6 not in saved[-1] and len(saved[-1]) == 9
+    fake = Fake()
+    out = run(fake, known=saved[-1], left_in_source={})
+    assert [ids for ids, _ in fake.calls] == [[6]] and out[5].text == "LINE 6"
+
+
 def test_empty_text_is_a_wrong_answer():
     with pytest.raises(TranslationFailed, match="cue 2"):
         run(Fake(behave=lambda cues: [{"id": c["id"], "text": "" if c["id"] == 2 else "x"} for c in cues]))

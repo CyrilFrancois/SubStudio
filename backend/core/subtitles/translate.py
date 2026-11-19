@@ -10,7 +10,10 @@ can shift a timing: the batch size, retries, validation of the returned id set, 
 the model keeps getting wrong, re-attaching timings by id, progress and abort.
 
 A language whose translation cannot be completed raises TranslationFailed. The source text is never
-shipped as if it were the translation.
+shipped as if it were the translation: a caller that passes `left_in_source` accepts that ONE cue the backend still
+answers wrongly once alone keeps its source text, with its id and the reason recorded there, instead of the whole
+language being thrown away (Ghosts S05E12 FR, 2026-11-19: one cue of 513 failed the language after 45 minutes).
+The quality gate then judges the cell, and its « untranslated » check names those lines.
 """
 
 from __future__ import annotations
@@ -121,13 +124,20 @@ def translate_cues(
     check_abort: Optional[Callable[[], None]] = None,
     call_retries: int = 2,
     retry_delay_s: float = 2.0,
+    known: Optional[Dict[int, str]] = None,
+    on_texts: Optional[Callable[[Dict[int, str]], None]] = None,
+    left_in_source: Optional[Dict[int, str]] = None,
 ) -> List[Cue]:
     """
     Translates every cue into `target`; returns new cues with the SAME ids and timings.
     on_batch(done_cues, total_cues) reports progress; check_abort() raises to stop (JobAborted).
     A call that raises is retried `call_retries` times, then the language fails.
     An answer whose id set is wrong is retried once, then the batch is split in halves down to one cue;
-    a single cue still answered wrongly fails the language.
+    a single cue still answered wrongly fails the language, or, when `left_in_source` is given, keeps its source
+    text and is recorded there as {id: reason}.
+    known ({id: text}, from core/artifacts) are lines already translated and validated by an earlier run: only the
+    others are sent. on_texts(all validated so far) runs after every batch, so a failure keeps what was done.
+    A cue left in the source language is never in on_texts: it is not validated, so a rerun sends it again.
     """
     if not cues:
         raise TranslationFailed(f"{target}: nothing to translate (0 cues)")
@@ -135,8 +145,10 @@ def translate_cues(
     by_id = {c.id: c for c in cues}
     if len(by_id) != len(cues):
         raise TranslationFailed(f"{target}: duplicate cue ids in the source")
-    texts: Dict[int, str] = {}
-    done = 0
+    texts: Dict[int, str] = {i: t for i, t in (known or {}).items() if i in by_id and t}
+    done = len(texts)
+    if done and on_batch:
+        on_batch(done, len(cues))
 
     position = {c.id: i for i, c in enumerate(cues)}
     # Translating into the source language legitimately returns the same text.
@@ -175,18 +187,34 @@ def translate_cues(
             texts.update(call(batch))
         except BatchMismatch as e:
             if len(batch) == 1:
-                raise TranslationFailed(f"{target}: {translator.name} cannot translate cue {batch[0].id}: {e}") from e
-            half = len(batch) // 2
-            logger.warning(f"Splitting cues {batch[0].id}-{batch[-1].id} into two batches")
-            run(batch[:half])
-            run(batch[half:])
-            return
+                if left_in_source is None:
+                    raise TranslationFailed(
+                        f"{target}: {translator.name} cannot translate cue {batch[0].id}: {e}") from e
+                logger.warning(f"{target}: cue {batch[0].id} left in the source language: {e}")
+                left_in_source[batch[0].id] = str(e)
+                texts[batch[0].id] = batch[0].text
+            else:
+                half = len(batch) // 2
+                logger.warning(f"Splitting cues {batch[0].id}-{batch[-1].id} into two batches")
+                run(batch[:half])
+                run(batch[half:])
+                return
         done += len(batch)
+        if on_texts:
+            on_texts({i: t for i, t in texts.items() if i not in (left_in_source or {})})
         if on_batch:
             on_batch(done, len(cues))
 
-    for i in range(0, len(cues), size):
-        run(cues[i:i + size])
+    todo = [c for c in cues if c.id not in texts]
+    for i in range(0, len(todo), size):
+        run(todo[i:i + size])
+
+    # At least one cue may stay: on a short file, 10 % is under one cue, and one stubborn line must not cost it.
+    if left_in_source and len(left_in_source) > max(1, MAX_ECHO_SHARE * len(cues)):
+        # One stubborn cue is kept; this many means the model cannot do this text: the language fails, by name.
+        ids = sorted(left_in_source)
+        raise TranslationFailed(f"{target}: {translator.name} left {len(ids)} of {len(cues)} cues untranslated "
+                                f"(cues {', '.join(map(str, ids[:5]))}): {left_in_source[ids[0]]}")
 
     if check_echo:
         long_lines = [c for c in cues if _is_sentence(c.text)]
