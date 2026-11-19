@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { BadgeCheck, ChevronDown, ChevronRight, Folder, SlidersHorizontal } from 'lucide-react';
 import type { JobOptions, LanguageCoverage, LibraryVideo } from '@/lib/types';
 import { languageName } from '@/lib/languages';
-import CoverageChip from './CoverageChip';
+import CoverageChip, { coverageNote } from './CoverageChip';
 import VideoDetails, { hasOverrides, NO_OVERRIDES } from './VideoDetails';
 
 export interface Row {
@@ -52,7 +52,7 @@ function FolderCheckbox({ rows, selected, onSelect }: { rows: Row[]; selected: S
 export default function LibraryTable({ groups, languages, selected, onSelect, overrides, onOverride }: Props) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState<string | null>(null);
-  const cols = `2.5rem minmax(0,1fr) 4rem repeat(${languages.length}, 11rem) 2.5rem`;
+  const cols = `2.5rem minmax(0,1fr) 4rem repeat(${languages.length}, 12.5rem) 2.5rem`;
 
   const toggleFolder = (f: string) => setCollapsed(prev => {
     const next = new Set(prev);
@@ -69,7 +69,10 @@ export default function LibraryTable({ groups, languages, selected, onSelect, ov
         <span role="columnheader">Video</span>
         <span role="columnheader">Length</span>
         {languages.map(l => (
-          <span role="columnheader" key={l} title={languageName(l)}>{languageName(l)}</span>
+          <span role="columnheader" key={l}
+                title={l === 'ov' ? 'The language spoken in the video (OV), detected from the audio when the file does not say' : languageName(l)}>
+            {l === 'ov' ? 'Original version (spoken)' : languageName(l)}
+          </span>
         ))}
         <span role="columnheader"><span className="sr-only">Details</span></span>
       </div>
@@ -129,17 +132,23 @@ export default function LibraryTable({ groups, languages, selected, onSelect, ov
                       )}
                     </span>
                     <span role="cell" className="text-xs text-gray-500 tabular-nums">{duration(video.duration_s)}</span>
-                    {coverage.map(c => (
-                      <span role="cell" key={c.language}>
-                        {c.state === 'passed' ? (
-                          // A validated cell opens its lines in Review.
-                          <Link href={`/review?video=${encodeURIComponent(video.id)}&lang=${encodeURIComponent(c.language)}`}
-                                onClick={e => e.stopPropagation()} className="rounded-md hover:brightness-125 focus-visible:outline focus-visible:outline-indigo-500">
-                            <CoverageChip coverage={c} />
-                          </Link>
-                        ) : <CoverageChip coverage={c} />}
-                      </span>
-                    ))}
+                    {coverage.map(c => {
+                      const note = coverageNote(c);
+                      return (
+                        <span role="cell" key={c.language} className="min-w-0">
+                          {c.state === 'passed' ? (
+                            // A validated cell opens its lines in Review.
+                            <Link href={`/review?video=${encodeURIComponent(video.id)}&lang=${encodeURIComponent(c.language)}`}
+                                  aria-label={`Read and fix the ${c.language === 'ov' ? 'original version' : languageName(c.language)} subtitles of ${video.name}`}
+                                  onClick={e => e.stopPropagation()} className="inline-block rounded-md hover:brightness-125">
+                              <CoverageChip coverage={c} />
+                            </Link>
+                          ) : <CoverageChip coverage={c} />}
+                          {/* The verdict's reason in words, visible without hovering (D-0002 §5). */}
+                          {note && <span className="block mt-0.5 text-[11px] leading-snug text-gray-500 line-clamp-2" title={note}>{note}</span>}
+                        </span>
+                      );
+                    })}
                     <span role="cell">
                       <button
                         type="button"

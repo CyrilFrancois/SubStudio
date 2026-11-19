@@ -13,6 +13,16 @@ const LABEL: Record<StageProgress['stage'], string> = {
   write: 'Write',
 };
 
+// What each stage does, in words (the stage's hover hint; the backend's own detail line follows it).
+export const STAGE_WHY: Record<StageProgress['stage'], string> = {
+  check: 'Check: the quality check judges the subtitles already in or next to the video; good ones are kept',
+  download: 'Download: look for a human-made subtitle online and re-time it to the audio',
+  transcribe: 'Transcribe: write down what is said in the audio (when nothing good exists in that language)',
+  correct: 'Correct: tidy the transcription',
+  translate: 'Translate: translate a good subtitle into the missing languages',
+  write: 'Write: put the new subtitles into the video file, check the copy, then replace the original',
+};
+
 // Whole class strings: a Tailwind class assembled at runtime ships no CSS.
 const TONE: Record<StageProgress['state'], string> = {
   pending: 'text-gray-500',
@@ -55,7 +65,7 @@ export default function StageStepper({ stages }: { stages: StageProgress[] }) {
         const pct = s.state === 'done' ? 100 : s.state === 'running' ? Math.round((s.progress ?? 0) * 100) : 0;
         const left = s.state === 'running' ? eta(s.eta_s) : null;
         return (
-          <li key={s.stage} className="min-w-0" title={s.detail ?? undefined}>
+          <li key={s.stage} className="min-w-0" title={`${STAGE_WHY[s.stage]}.${s.detail ? `\n${s.detail}` : ''}`}>
             <div className={`flex items-center gap-1.5 text-xs ${TONE[s.state]}`}>
               <Icon state={s.state} />
               <span className="truncate">{LABEL[s.stage]}</span>

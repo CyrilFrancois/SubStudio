@@ -138,6 +138,12 @@ function Review() {
         </div>
       </header>
 
+      {list && list.origin === 'translated' && !list.from_language && (
+        // workspace-6e: the source lines live only in the run kept in memory; a restart drops them.
+        <p role="status" className="mx-6 mt-3 text-xs text-gray-400">
+          The lines this was translated from are not available any more (the backend restarted since the run), so only the subtitle is shown.
+        </p>
+      )}
       {!videoId || !lang ? (
         <p className="px-6 py-10 text-sm text-gray-400">
           Open a subtitle from the <Link href="/" className="underline underline-offset-2">Library</Link> (a validated cell) or from a finished job in the <Link href="/queue" className="underline underline-offset-2">Queue</Link>.

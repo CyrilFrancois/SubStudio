@@ -121,8 +121,12 @@ export default function LibraryPage() {
   const uncheckedCount = rows.filter(r => r.coverage.some(c => c.state === 'unchecked')).length;
   const selectedRows = rows.filter(r => selected.has(r.video.id));
   // Validated videos are skipped by Start (D-0002 §5): never sent, and said so.
-  const toStart = selectedRows.filter(r => !r.video.validated).map(r => r.video.id);
-  const skippedValidated = selectedRows.length - toStart.length;
+  // Nothing ticked: Start takes every video still to do among those shown (the common path is one click:
+  // « subtitle what is missing in my usual languages », user-process §7). Ticking narrows it.
+  const startAll = selectedRows.length === 0;
+  const toStart = (startAll ? visible : selectedRows).filter(r => !r.video.validated).map(r => r.video.id);
+  const skippedValidated = startAll ? 0 : selectedRows.length - toStart.length;
+  const filtered = query.trim() !== '' || filter !== 'all';
 
   return (
     <div className="h-full flex flex-col">
@@ -185,8 +189,9 @@ export default function LibraryPage() {
             </select>
           </label>
           <span className="text-xs text-gray-500">{visible.length} shown</span>
-          <Link href="/settings" className="ml-auto text-xs text-gray-400 hover:text-gray-200 underline underline-offset-2">
-            Languages: {languages.map(l => l.toUpperCase()).join(', ') || '—'}
+          <Link href="/settings" title="The languages every video gets, remembered between runs: change them in Settings"
+                className="ml-auto text-xs text-gray-400 hover:text-gray-200 underline underline-offset-2">
+            Languages: {languages.map(l => l.toUpperCase()).join(', ') || '—'} (change)
           </Link>
         </div>
       </header>
@@ -215,7 +220,10 @@ export default function LibraryPage() {
           </div>
         )}
         {lib && lib.videos.length > 0 && visible.length === 0 && (
-          <div className="py-24 text-center text-sm text-gray-400">No video matches this search or filter.</div>
+          <div className="py-24 text-center text-sm text-gray-400">
+            No video matches this search or filter.{' '}
+            <button type="button" onClick={() => { setQuery(''); setFilter('all'); }} className="underline underline-offset-2 hover:text-gray-200">Show all videos</button>
+          </div>
         )}
         {lib && visible.length > 0 && (
           <LibraryTable
@@ -243,9 +251,11 @@ export default function LibraryPage() {
           </div>
         ) : (
           <span className="text-xs text-gray-500">
-            {selectedRows.length
-              ? `${selectedRows.length} selected${skippedValidated ? `, ${skippedValidated} already validated (skipped)` : ''}`
-              : 'Select videos (a folder checkbox selects the whole folder), then Start.'}
+            {!startAll
+              ? `${selectedRows.length} selected${skippedValidated ? `, ${skippedValidated} already validated (skipped)` : ''}.`
+              : toStart.length
+                ? `Start makes every missing subtitle for the ${toStart.length} video${toStart.length === 1 ? '' : 's'} still to do${filtered ? ' in this list' : ''}. Tick videos to start fewer.`
+                : `Every video${filtered ? ' in this list' : ''} is validated: nothing to start.`}
           </span>
         )}
         <button
@@ -255,7 +265,7 @@ export default function LibraryPage() {
           className="ml-auto flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white disabled:bg-white/5 disabled:text-gray-600 disabled:cursor-not-allowed"
         >
           {busy ? <Loader2 size={15} className="animate-spin" aria-hidden /> : <Play size={15} aria-hidden />}
-          Start{toStart.length ? ` (${toStart.length})` : ''}
+          {startAll ? `Start all to do (${toStart.length})` : `Start${toStart.length ? ` (${toStart.length})` : ''}`}
         </button>
       </footer>
     </div>

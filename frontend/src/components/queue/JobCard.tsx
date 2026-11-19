@@ -57,6 +57,7 @@ export default function JobCard({ job, live, onCancel, cancelling }: Props) {
         </span>
         <h3 className="text-sm text-gray-200 truncate min-w-0 flex-1" title={job.video_name}>{job.video_name}</h3>
         <span className="text-xs text-gray-500 shrink-0 flex gap-2" title={job.languages.map(languageName).join(', ')}>
+          {job.state === 'done' && <span className="text-gray-400">Review:</span>}
           {job.state === 'done'
             // A finished job opens each language it made in Review.
             ? job.languages.map(l => (

@@ -68,6 +68,7 @@ export default function VideoDetails({ video, options, onChange }: Props) {
         <h4 className="text-gray-400 font-semibold">
           Overrides {hasOverrides(options) && <span className="text-amber-300 font-normal">(set)</span>}
         </h4>
+        <p className="text-gray-500">Only for a video that comes out wrong. Used whenever this video is started from this page; forgotten when the page reloads.</p>
         <label className="flex items-center gap-2 text-gray-300 cursor-pointer">
           <input
             type="checkbox"
@@ -79,6 +80,7 @@ export default function VideoDetails({ video, options, onChange }: Props) {
         </label>
         <label className="block text-gray-300">
           <span className="block mb-1">Timing shift (milliseconds, + = later)</span>
+          <span className="block mb-1 text-gray-500">When every line shows up early or late by the same amount.</span>
           <input
             type="number"
             step={100}
