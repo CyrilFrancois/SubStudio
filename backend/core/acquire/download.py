@@ -1,11 +1,12 @@
 # download.py — rung 2 of the ladder: find and download a human subtitle for one video through subliminal's free providers. Exports: download_subtitles, providers, min_score, Downloaded, DownloadReport, ProvidersUnavailable.
 import logging
 import os
-from dataclasses import dataclass
-from typing import Dict, FrozenSet, Iterable, List, Optional
+from dataclasses import dataclass, field
+from typing import Callable, Dict, FrozenSet, Iterable, List, Optional
 
 from babelfish import Language
-from subliminal import ProviderPool, region, refine, save_subtitles, scan_video
+import pysubs2
+from subliminal import ProviderPool, region, refine, scan_video
 from subliminal.score import compute_score, episode_scores, movie_scores
 from subliminal.video import Episode
 
@@ -53,6 +54,14 @@ class DownloadReport:
     # Providers that errored (outage, quota, block). A language missing from `subtitles` while this is non-empty
     # means « not found where we could look », not « no human subtitle exists »: a later run may find it.
     failed_providers: FrozenSet[str] = frozenset()
+    # Per language, one sentence per candidate tried and turned down, in order (« gestdown #1: <reason> »).
+    rejected: Dict[str, List[str]] = field(default_factory=dict)
+
+
+# Candidates tried per language when the first is turned down (re-timed and gated each): a release cut differently
+# is common (Ghosts S05E12: the best EN drifted 5.7 s, 6 EN were listed), but each try costs a download (quota) and a
+# re-timing (~30 s), so the ladder falls to translation after this many.
+MAX_CANDIDATES = 3
 
 
 def _configure_cache() -> None:
@@ -84,10 +93,13 @@ def min_score(video) -> int:
     return floor
 
 
-def download_subtitles(video_path: str, languages: Iterable[str], out_dir: str,
-                       env: Optional[dict] = None) -> DownloadReport:
-    """Best human subtitle per language, saved as `{stem}.{lang}.srt` in `out_dir`. A language with no
-    acceptable match is absent from the result; a search no provider could run raises ProvidersUnavailable."""
+def download_subtitles(video_path: str, languages: Iterable[str], out_dir: str, env: Optional[dict] = None,
+                       try_one: Optional[Callable[[str, Downloaded], Optional[str]]] = None,
+                       per_language: int = 1) -> DownloadReport:
+    """Human subtitles per language, best match first, saved as UTF-8 SRT in `out_dir`. With `try_one`, each
+    downloaded candidate is offered to it (re-time, gate…): None keeps it, a sentence turns it down and the next
+    candidate is tried, up to `per_language`. A language with nothing kept is absent from `subtitles`; a search no
+    provider could run raises ProvidersUnavailable."""
     langs = {Language.fromalpha2(l) for l in languages}
     if not langs:
         return DownloadReport({})
@@ -103,6 +115,10 @@ def download_subtitles(video_path: str, languages: Iterable[str], out_dir: str,
     names, configs = providers(env)
     refine(video, refiners=["hash"], providers=names, languages=langs)
     floor = min_score(video)
+    os.makedirs(out_dir, exist_ok=True)
+    stem = os.path.splitext(os.path.basename(video_path))[0]
+    out: Dict[str, Downloaded] = {}
+    rejected: Dict[str, List[str]] = {}
 
     with ProviderPool(providers=names, provider_configs=configs) as pool:
         found = pool.list_subtitles(video, langs)
@@ -114,24 +130,33 @@ def download_subtitles(video_path: str, languages: Iterable[str], out_dir: str,
             logger.warning(f"Subtitle providers failed: {', '.join(sorted(failed))}")
         if asked and asked <= failed:
             raise ProvidersUnavailable(f"no subtitle provider answered ({', '.join(sorted(failed))})")
-        best = pool.download_best_subtitles(found, video, langs, min_score=floor)
-        got = {s.language for s in best}
-        for lang in sorted({s.language for s in found if compute_score(s, video) >= floor} - got, key=str):
-            # Candidates existed but every download failed: the caller falls to the next rung, and the log says why.
-            logger.warning(f"{lang.alpha2}: matching subtitles found but none could be downloaded")
+        for lang in sorted(langs, key=str):
+            code = lang.alpha2
+            ranked = sorted((s for s in found if s.language == lang and compute_score(s, video) >= floor),
+                            key=lambda s: compute_score(s, video), reverse=True)
+            for n, sub in enumerate(ranked[:max(1, per_language)], start=1):
+                label = f"{sub.provider_name} #{n}"
+                # A quota or a ban discards the provider inside the pool: its download returns False at once.
+                if not pool.download_subtitle(sub):
+                    rejected.setdefault(code, []).append(f"{label}: could not be downloaded")
+                    continue
+                path = os.path.join(out_dir, f"{stem}.{code}.{n}.srt")
+                try:
+                    # sub.text is decoded by subliminal from the provider's encoding; written as UTF-8 SRT whatever the
+                    # provider served (cp1252, ASS…), so no later read can lose the accents.
+                    pysubs2.SSAFile.from_string(sub.text or "").save(path, encoding="utf-8", format_="srt")
+                except Exception as e:  # unparseable file: the next candidate may be fine
+                    rejected.setdefault(code, []).append(f"{label}: unreadable ({str(e)[:80]})")
+                    continue
+                d = Downloaded(code, path, sub.provider_name, "hash" in sub.get_matches(video))
+                why = try_one(code, d) if try_one else None
+                if why:
+                    rejected.setdefault(code, []).append(f"{label}: {why}")
+                    logger.info(f"{code}: candidate {label} turned down: {why}")
+                    continue
+                out[code] = d
+                logger.info(f"Downloaded {code} subtitle from {sub.provider_name} (candidate {n} of {len(ranked)}, "
+                            f"score {compute_score(sub, video)}, {floor} needed)")
+                break
         failed = frozenset(pool.failed_providers)  # now including download-time failures (quota)
-
-    os.makedirs(out_dir, exist_ok=True)
-    # UTF-8 SRT whatever the provider served (cp1252, ASS…): the encoding loss of a raw read never happens here.
-    saved = save_subtitles(video, best, directory=out_dir, encoding="utf-8", subtitle_format="srt",
-                           extension=".srt")
-    out: Dict[str, Downloaded] = {}
-    for sub in saved:
-        lang = sub.language.alpha2
-        path = os.path.join(out_dir, os.path.basename(sub.get_path(video, extension=".srt")))
-        if not os.path.isfile(path) or os.path.getsize(path) == 0:
-            raise RuntimeError(f"subtitle reported saved but missing: {os.path.basename(path)}")
-        out[lang] = Downloaded(lang, path, sub.provider_name, "hash" in sub.get_matches(video))
-        logger.info(f"Downloaded {lang} subtitle from {sub.provider_name} "
-                    f"(score {compute_score(sub, video)}, {floor} needed)")
-    return DownloadReport(out, failed)
+    return DownloadReport(out, failed, rejected)
