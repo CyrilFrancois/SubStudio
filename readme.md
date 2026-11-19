@@ -23,10 +23,14 @@ It takes the first rung that gives a subtitle (the full process: [doc/user-proce
 
 | # | Situation | What happens |
 |---|---|---|
-| 1 | The file already carries a subtitle in that language **made by SubStudio** | It is kept. A file already complete stays unchanged: same bytes, same name. Subtitles from elsewhere are not trusted yet (see Status). |
-| 2 | Nothing usable in the file | A human subtitle is **downloaded** from free providers, then **re-timed to the audio** (`ffsubsync`). |
-| 3 | A human subtitle exists in another language | It is **translated**, with the context looked up for that episode: series, title, summary and character names, from TVmaze. None of it is invented by a model. |
+| 1 | The file already carries a subtitle in that language that **passes the quality gate** | It is kept. A file already complete stays unchanged: same bytes, same name. Subtitles not made by SubStudio count too (Settings « count existing », on by default). |
+| 2 | Nothing usable in the file | A human subtitle is **downloaded** from free providers, **re-timed to the audio** (`ffsubsync`), then checked by the gate. |
+| 3 | A human subtitle exists in another language | It is **translated** on your computer (TranslateGemma 4B), then checked by the gate. |
 | 4 | No subtitle anywhere | The speech is **transcribed** (Whisper turbo, locally), then translated into the other languages. |
+
+The **quality gate** checks every subtitle before it counts: in sync with the speech, covering it, in the right
+language, readable (encoding, reading speed). A subtitle it rejects falls through to the next rung, with the reason.
+A machine translation is never translated again.
 
 Each video × language ends with a verdict. Either it passed, with its origin (`kept`, `downloaded`,
 `translated from en`, `transcribed`), or it failed, with one sentence saying why. A failed language can be retried
@@ -48,9 +52,9 @@ The new tracks are written **into the video** by a verified swap:
 |---|---|
 | Library, coverage per language, settings, Start and the queue (new UI) | works. Jobs are kept in SQLite and survive a restart |
 | Ladder: existing → download → translate → transcribe, one verdict per language, retry one language | works |
-| Translation context (TVmaze series, episode, summary, character names) | works for TV episodes. Films get their title and year only |
-| Translation | **Gemini only, and only with `GEMINI_API_KEY`.** A free **local** translator is in progress (decision D-0003 pending). Without a key, rungs 1, 2 and 4 still work, and a language that needs translating fails with that reason |
-| Quality gate (sync, coverage, language, encoding, reading speed) | built and benchmarked (17/17 real tracks judged right, 128/128 seeded faults rejected: [doc/gate-bench.md](doc/gate-bench.md)), not yet called by the ladder. Until it is, a subtitle **not made by SubStudio** is ignored (`count_existing` off) |
+| Quality gate (sync, coverage, language, encoding, reading speed) | works, on every rung (benchmark: 17/17 real tracks judged right, 128/128 seeded faults rejected, [doc/gate-bench.md](doc/gate-bench.md)) |
+| Translation | **local and free by default:** TranslateGemma 4B on llama.cpp ([D-0003](doc/decisions/D-0003%20local%20translator%20TranslateGemma%204B.md)). Slow: about 5.5 s per line on a busy laptop, so about **1 hour per language** for a 45-minute episode (an overnight batch). Gemini (cloud) is opt-in with `TRANSLATOR=gemini` |
+| Translation context (TVmaze series, episode, summary, character names) | looked up for TV episodes (films: title and year). **Used by Gemini only:** the local model's prompt takes the text alone, for now |
 | Cue editor (`/api/subtitles`) | not built yet: answers `501` |
 
 ## Requirements
@@ -62,10 +66,30 @@ The new tracks are written **into the video** by a verified swap:
 - **Node.js** 18.17 or newer (LTS).
 - **ffmpeg and ffprobe on PATH:** `winget install Gyan.FFmpeg`, then open a new terminal.
 - About 1.6 GB of disk for the Whisper turbo model, downloaded on the first transcription.
+- **For translation (once, about 2.5 GB):** llama.cpp and the TranslateGemma model, in `%LOCALAPPDATA%\SubStudio`
+  (block below). Without them rungs 1, 2 and 4 still work, and a language that needs translating fails with the
+  reason (`LLAMA_SERVER_BIN does not point to a file`).
 
 ## Run it natively (Windows, PowerShell)
 
-From the repository root, in two terminals. The backend does **not** read `.env` by itself: the variables are set in
+**Once: the local translator.** It downloads llama.cpp release b12532, Vulkan build
+(https://github.com/ggml-org/llama.cpp/releases/tag/b12532), and TranslateGemma 4B Q4_K_M (2.5 GB,
+https://huggingface.co/bullerwins/translategemma-4b-it-GGUF) to the default paths. The integrated GPU does the work
+through Vulkan; with no usable GPU, set `$env:LLAMA_GPU_LAYERS = "0"` before starting the backend.
+
+```powershell
+$d = "$env:LOCALAPPDATA\SubStudio"
+New-Item -ItemType Directory -Force "$d\llama.cpp\dl", "$d\models" | Out-Null
+Invoke-WebRequest https://github.com/ggml-org/llama.cpp/releases/download/b12532/llama-b12532-bin-win-vulkan-x64.zip -OutFile "$d\llama.cpp\dl\llama-b12532-bin-win-vulkan-x64.zip"
+Expand-Archive "$d\llama.cpp\dl\llama-b12532-bin-win-vulkan-x64.zip" "$d\llama.cpp\b12532-vulkan" -Force
+Invoke-WebRequest https://huggingface.co/bullerwins/translategemma-4b-it-GGUF/resolve/main/translategemma-4b-it-Q4_K_M.gguf -OutFile "$d\models\translategemma-4b-it-Q4_K_M.gguf"
+Test-Path "$d\llama.cpp\b12532-vulkan\llama-server.exe", "$d\models\translategemma-4b-it-Q4_K_M.gguf"
+```
+
+The last line prints `True` twice. SubStudio starts and stops `llama-server` itself, on port 8092, only while it
+translates.
+
+Then, from the repository root, in two terminals. The backend does **not** read `.env` by itself: the variables are set in
 its terminal.
 
 **Terminal 1: backend** (http://localhost:8000)
@@ -74,7 +98,6 @@ its terminal.
 py -3.12 -m venv .venv
 .venv\Scripts\python -m pip install -r backend\requirements.txt
 $env:SUBSTUDIO_MEDIA_ROOT = "C:/Videos"     # the folder holding your videos
-# Optional, cloud translation until the local translator lands: $env:GEMINI_API_KEY = "<your key>"
 Set-Location backend
 ..\.venv\Scripts\python -m uvicorn main:app --host 127.0.0.1 --port 8000
 ```
@@ -106,6 +129,8 @@ docker compose up --build
 - **Backend address:** fixed at `http://localhost:8000` by `docker-compose.yml`; the value in `.env` is not used there.
 - **Config changes:** `docker compose restart` does not re-read `.env`. After a change, run
   `docker compose down`, then `docker compose up --build`.
+- **No local translation:** the backend container is Linux and cannot run the Windows `llama-server.exe`, so a
+  language that needs translating fails there, unless you set `TRANSLATOR=gemini` and `GEMINI_API_KEY` in `.env`.
 - **Not re-checked:** this path was not re-checked for this readme. Docker's virtual machine on Windows also adds
   its own memory use.
 
@@ -122,8 +147,13 @@ Every setting is an environment variable. `.env.example` lists them with their d
 | `SUBSTUDIO_API_STUB` | off | `1` simulates jobs so the UI can be tried without processing anything; the UI shows a banner. |
 | `WHISPER_MODEL` | `turbo` | faster-whisper model name. |
 | `ASR_THREADS` | `4` | CPU threads for transcription (the budget is 4). |
-| `GEMINI_API_KEY` | empty | Cloud translation until the local translator lands (https://aistudio.google.com/apikey). |
-| `GEMINI_MODEL` | `gemini-3.8-flash` | Must be a Gemini 3.x model. |
+| `TRANSLATOR` | `local` | `local` (TranslateGemma on llama.cpp, free, on this PC) or `gemini` (cloud, opt-in). |
+| `LLAMA_SERVER_BIN` | `%LOCALAPPDATA%\SubStudio\llama.cpp\b12532-vulkan\llama-server.exe` | The llama.cpp server the local translator starts. |
+| `LLAMA_MODEL_PATH` | `%LOCALAPPDATA%\SubStudio\models\translategemma-4b-it-Q4_K_M.gguf` | The local translation model. |
+| `LLAMA_GPU_LAYERS` | `99` | Layers on the integrated GPU; `0` = CPU only. |
+| `LLAMA_PORT` | `8092` | Port of that server, on 127.0.0.1. |
+| `GEMINI_API_KEY` | empty | Only with `TRANSLATOR=gemini` (https://aistudio.google.com/apikey). |
+| `GEMINI_MODEL` | `gemini-3.8-flash` | Only with `TRANSLATOR=gemini`. Must be a Gemini 3.x model. |
 | `OPENSUBTITLES_USERNAME`, `OPENSUBTITLES_PASSWORD` | empty | Optional free OpenSubtitles.com account: adds the largest catalogue and exact-file matches. Without it, only keyless providers are asked. |
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Where the frontend finds the backend. Applied when `npm run dev` starts. |
 | `NEXT_PUBLIC_MEDIA_PATH` | none | Docker only: the host folder mounted as `/data`. |
@@ -135,13 +165,13 @@ Every setting is an environment variable. `.env.example` lists them with their d
 |---|---|---|
 | Transcription | locally | Whisper large-v3 **turbo** via faster-whisper, int8, voice-activity detection, 4 threads |
 | Quality gate | locally | Voice-activity detection and text checks |
-| Translation | cloud today, local planned | Gemini, which receives the subtitle text to translate, only with a key. A free local model chosen on the bench is in progress (D-0003) |
+| Translation | locally | TranslateGemma 4B Q4_K_M on llama.cpp, on the integrated GPU, 10 lines per call (D-0003). Opt-in instead: Gemini (cloud), which receives the subtitle text to translate |
 | Download | network | subliminal's free providers, plus OpenSubtitles.com with an account. They receive the file name, and some providers a hash of the file |
 | Context | network | [TVmaze](https://www.tvmaze.com) (free, no key, CC BY-SA). It receives the series title. Cached per series |
 | Re-timing, writing | locally | ffsubsync, ffmpeg |
 
-No video or audio is ever uploaded. `SUBSTUDIO_DOWNLOADS=0` keeps SubStudio off the network, apart from Gemini if a
-key is set.
+No video or audio is ever uploaded. `SUBSTUDIO_DOWNLOADS=0` keeps SubStudio off the network, apart from Gemini when
+`TRANSLATOR=gemini`.
 
 ## API
 
@@ -155,7 +185,7 @@ The backend serves its own reference at http://localhost:8000/docs.
 | `POST /api/jobs`, `GET /api/jobs`, `DELETE /api/jobs/{id}` | The queue: start videos, list jobs, cancel one. |
 | `GET /api/jobs/{id}/logs` | A job's log lines, oldest first. |
 | `GET /api/events` | One server-sent event stream for every tab. |
-| `GET /api/settings`, `PUT /api/settings` | Wanted languages and `count_existing`, stored under `SUBSTUDIO_STATE_DIR`. |
+| `GET /api/settings`, `PUT /api/settings` | Wanted languages and `count_existing` (on by default), stored under `SUBSTUDIO_STATE_DIR`. |
 | `GET /api/system` | Media root, loaded model, CPU and RAM use, and the resource budget. |
 | `GET`/`PUT /api/subtitles/{video_id}/{lang}` | The cue editor: `501` until it is built. |
 
@@ -185,9 +215,10 @@ never touch your library, and turn online lookups off. Model and gate benchmarks
 
 ```
 backend/
-  main.py              FastAPI app, pipeline routes, the orchestrator
+  main.py              FastAPI app and the pipeline routes
   api/                 the UI contract: library, queue (SQLite), settings, system, events
   core/
+    pipeline.py        the orchestrator: one video through the ladder, the gate and the swap
     acquire/           rungs 1–2: existing subtitles, downloads, re-timing
     ladder.py          runs the four rungs for one video
     cells.py           one verdict per video × language
@@ -195,7 +226,8 @@ backend/
     subtitles/         the typed cue list and the translator contract
     context/           looked-up series and episode facts, names to keep
     transcriber.py     Whisper turbo → typed result
-    translator.py      Gemini backend
+    translators/       the local translator (llama.cpp server, TranslateGemma) and the backend picker
+    translator.py      Gemini backend (opt-in)
     output/            the verified in-place swap and the file-name marker
 frontend/              Next.js 14: the library and queue (/), settings (/settings), the old dashboard (/legacy)
 bench/                 model and gate benchmarks on this machine
@@ -205,5 +237,6 @@ doc/                   process, reviews, decisions
 ## Credits
 
 Episode facts come from [TVmaze](https://www.tvmaze.com), licensed CC BY-SA. Transcription uses
-[faster-whisper](https://github.com/SYSTRAN/faster-whisper), downloads use
+[faster-whisper](https://github.com/SYSTRAN/faster-whisper), translation uses
+[llama.cpp](https://github.com/ggml-org/llama.cpp) with Google's TranslateGemma, downloads use
 [subliminal](https://github.com/Diaoul/subliminal), and re-timing uses [ffsubsync](https://github.com/smacke/ffsubsync).

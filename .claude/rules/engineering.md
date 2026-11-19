@@ -142,8 +142,10 @@ and lost on restart.
 
 ### Backend (FastAPI, Python 3.10)
 
-- `backend/main.py` — `PipelineOrchestrator` + the four routes. Blocking steps dispatched with
-  `asyncio.to_thread`; the batch runs as an `asyncio.create_task`.
+- `backend/main.py` — the FastAPI app: routes and the lifespan that builds the orchestrator.
+- `backend/core/pipeline.py` — `PipelineOrchestrator` and the job models: per video, plan → rungs 1–2 →
+  3–4 through `core/ladder.py` (every result gated by `core/gate`) → the in-place update. Blocking steps
+  go through `asyncio.to_thread`; a batch runs as an `asyncio.create_task`.
 - `backend/core/scanner.py` — recursive `os.scandir` of `/data`; per-video ffprobe for embedded
   subtitle streams; sidecar lookup in `.`, `Subs/`, `Subtitles/`. Guards against escaping
   `base_path`.
@@ -165,6 +167,15 @@ and lost on restart.
   several shows needs the filename's year, else nothing is looked up. Network failure → what is known plus
   `missing` (one sentence). Cached per series in `<STATE_DIR>/context/tvmaze/` (`api/config.STATE_DIR`,
   `SUBSTUDIO_STATE_DIR`).
+- `backend/core/translators/` — `make_translator()` picks the backend from `TRANSLATOR` (`local` default,
+  `gemini` opt-in). `llamacpp.py` —
+  `LlamaCppTranslator`, the default: TranslateGemma 4B Q4_K_M on a native llama.cpp server, 10 cues per
+  call as `id|text` lines, prompt rendered from the model's own chat template (`/props`), a reply cut at
+  the token limit raises `BatchMismatch`. `llama_server.py` starts the server on the first batch
+  (`--threads 4`, all layers on the iGPU) and `unload()` (part of the contract) stops it after each video's
+  translations, under a lock shared by batches and retries, so Whisper and the LLM are never loaded together
+  (D-0001). The source language comes from `detect_language` or Whisper; unknown, the cell fails at once.
+  Choice and numbers: `doc/decisions/D-0003`.
 - `backend/core/translator.py` — `GeminiTranslator`, an optional backend of that contract: Gemini
   REST (`httpx`, no SDK), `thinkingLevel: low`, JSON output with a response schema, 30 cues per
   call, temperature 0.2. Its context comes from `core/context.get_context` (filename + TVmaze lookup + the
@@ -225,7 +236,9 @@ boolean, not a mode.
 
 ### Configuration
 
-`.env` (gitignored; template in `.env.example`): `GEMINI_API_KEY`, optional `GEMINI_MODEL`
+`.env` (gitignored; template in `.env.example`): `TRANSLATOR` (`local` default), `LLAMA_SERVER_BIN`,
+`LLAMA_MODEL_PATH`, `LLAMA_GPU_LAYERS`, `LLAMA_PORT` (defaults under `%LOCALAPPDATA%\SubStudio\`);
+only with `TRANSLATOR=gemini`: `GEMINI_API_KEY`, optional `GEMINI_MODEL`
 (default `gemini-3.8-flash`; must be a 3.x model because the request sends `thinkingLevel`),
 `NEXT_PUBLIC_MEDIA_PATH`, `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_LANGUAGES` (legacy dashboard only),
 `WHISPER_MODEL`. UI API: `SUBSTUDIO_MEDIA_ROOT` (default `/data`), `SUBSTUDIO_STATE_DIR` (default

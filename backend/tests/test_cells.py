@@ -14,9 +14,11 @@ if not shutil.which("ffmpeg"):
 
 import main  # noqa: E402
 from core.acquire.types import Rung  # noqa: E402
-from core.cells import Cell, CellState, Origin, Source, produce_cell  # noqa: E402
+from core.cells import Cell, CellState, Origin, Source, VideoRun, produce_cell  # noqa: E402
 from core.events import event_manager  # noqa: E402
 from core.subtitles import Cue, TranslationContext, detect_language  # noqa: E402
+from core.gate import Verdict  # noqa: E402
+PASS = Verdict(True)
 
 # Enough English for language detection (20+ words).
 ENGLISH = [
@@ -39,6 +41,9 @@ class Tag:
         self.calls.append(target)
         out = [{"id": c["id"], "text": f"[{target}] {c['text']}"} for c in cues]
         return out[1:] if target in self.broken else out
+
+    def unload(self):
+        pass
 
 
 @pytest.fixture
@@ -81,6 +86,8 @@ def track_text(video, index):
 
 def orchestrator(translator):
     orch = main.PipelineOrchestrator()
+    # The clips carry a tone, not speech: these tests check the cells' plumbing; core/gate has its own tests.
+    orch.gate = lambda *a, **k: PASS
     orch.translator = translator
     return orch
 
@@ -179,7 +186,7 @@ def test_an_abort_mid_cell_ends_it_failed_not_running():
     cues = [Cue(id=i + 1, start_ms=i * 1000, end_ms=i * 1000 + 900, text=t) for i, t in enumerate(ENGLISH)]
     from core.acquire.types import LanguagePlan, Step
     from core.ladder import Ladder, LadderDeps
-    run = main.VideoRun(path="v", cells={"de": Cell("de")},
+    run = VideoRun(path="v", cells={"de": Cell("de")},
                         plans={"de": LanguagePlan("de", [Step(Rung.TRANSLATE, "de", from_languages=("en",))])},
                         human={"en": Source(cues=cues, rung=Rung.EXISTING, language="en", context=TranslationContext())})
     handle = JobHandle("v")
@@ -209,10 +216,15 @@ def test_a_transcription_uses_the_language_whisper_heard(tmp_path):
     asr = AsrResult(model="fake", language="en", language_probability=0.97, duration=3.0, speech=[(0.5, 1.4)],
                     segments=[AsrSegment(0.5, 1.4, "Hello there.", -0.2, 0.01, 1.1, words)])
     orch = orchestrator(Tag())
-    orch.transcriber.transcribe = lambda **kw: asr
+    order = []
+    orch.translator.unload = lambda: order.append("unload")
+    orch.transcriber.transcribe = lambda **kw: (order.append("asr"), asr)[1]
     job = main.VideoJob(name=video.name, path=str(video), out=["en", "de"], workflowMode="whisper")
     asyncio.run(orch.execute_pipeline(job, main.GlobalOptions(), 0, 1))
     cells = {c["language"]: c for c in orch.runs[str(video)].to_json()}
+    # D-0001: the translation model is freed before Whisper loads, and again once the video is done.
+    i = order.index("asr")
+    assert i > 0 and order[i - 1] == "unload" and order[-1] == "unload", order
     assert cells["en"]["origin"] == "transcribed" and orch.translator.calls == ["de"]
     assert cells["de"]["origin_label"] == "transcribed, translated from en"
     assert (cells["en"]["origin"], cells["de"]["origin"], cells["de"]["from_language"]) == ("transcribed", "translated", "en")

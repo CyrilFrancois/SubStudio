@@ -23,6 +23,7 @@ before the winget install still finds it).
 | `measure.py` | Runs a command; records minutes, peak RAM, peak and mean CPU in threads, and `within_budget`. `--watch llama-server.exe` adds a server process that does the real work. |
 | `score.py` | chrF of a candidate against a human reference, appended as one row to `bench/results/results.jsonl`. |
 | `subs.py` | Subtitle reader shared by the above: UTF-8, else the language's Windows code page, strict. |
+| `translate/` | Translation candidates on 150 public EN→FR subtitle lines (`opensubs_en_fr_150.jsonl`): `bench_translate.py --model tg-q4 --mode batch --ngl 99` starts llama-server (4 threads) or NLLB/CT2, records s/cue, tok/s, peak RAM, chrF, lost ids in `translate/results.jsonl`, and refuses a model that does not fit in free RAM; `run_all.sh` runs every candidate under the `heavy` lease; `rescore.py` compares on common cues. Extra deps: `ctranslate2 tokenizers jinja2 gguf`. Result: `doc/decisions/D-0003`. |
 
 ## The bench set
 
