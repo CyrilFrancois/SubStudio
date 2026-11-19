@@ -16,6 +16,13 @@ FRAME_MS = 10
 MAX_OFFSET_MS = 60_000   # a release-to-release shift is seconds; a minute covers intros and ad breaks
 COVER_PAD_MS = 1_000     # a cue covers speech up to 1 s around it: captions lead and trail the voice
 MIN_HALF_CUES = 20       # below this, half a subtitle gives no trustworthy offset of its own
+# What locates a half's offset is the pattern of PAUSES in its speech, not how many cues it has: with few speech
+# spans, many lags within ±MAX_OFFSET_MS fit about as well and the argmax is noise. Measured 2026-11-19: the halves of
+# the 15 cached Ghosts S05 episodes hold 71-161 speech spans; a 5-min clip whose dialogue barely pauses (S05E07
+# 120-420 s) holds ~22 per half, and Whisper turbo's transcript of that very audio read « timing moves -53.5 s ».
+# A peak-sharpness guard was tried instead and rejected: a frame-rate fault smears each half's peak too, so it hid
+# the fault drift exists to catch (16 of 16 seeded 25/23.976 copies lost their drift reason, 4 passed).
+MIN_HALF_SPEECH_SPANS = 40
 # A cue that only describes a sound or music (« [laughs] », « (door closes) », « ♪ ») has no speech under it.
 _SOUND_ONLY = re.compile(r"^\s*(?:[\[(][^\])]*[\])]\s*|[♪#*]+.*)+$", re.S)
 
@@ -28,7 +35,8 @@ def dialogue_cues(cues: Sequence[Cue]) -> List[Cue]:
 class SyncMeasure:
     offset_ms: int            # shift that best aligns the cues to the speech
     drift_ms: Optional[int]   # offset of the second half minus the first (a frame-rate mismatch grows over time);
-                              # None when a half has fewer than MIN_HALF_CUES dialogue cues
+                              # None when a half has fewer than MIN_HALF_CUES dialogue cues or fewer than
+                              # MIN_HALF_SPEECH_SPANS speech spans: not measurable, which is not « 0 »
     peak_ratio: float         # correlation at the best offset / at zero: how clearly the best one wins
     on_speech: float          # share of dialogue-cue time that lies on detected speech (0-1)
     speech_covered: float     # share of speech time that has a cue within COVER_PAD_MS (0-1)
@@ -79,7 +87,10 @@ def measure_sync(cues: Sequence[Cue], speech: Sequence[Span], duration_ms: Optio
     first = [c for c in talk if c.end_ms <= half]
     second = [c for c in talk if c.start_ms >= half]
     drift: Optional[int] = None  # not measurable: too few cues per half (forced subtitles, a short clip)
-    if len(first) >= MIN_HALF_CUES and len(second) >= MIN_HALF_CUES:
+    spans_first = sum(1 for a, b in speech if b <= half)
+    spans_second = sum(1 for a, b in speech if a >= half)
+    if (len(first) >= MIN_HALF_CUES and len(second) >= MIN_HALF_CUES
+            and min(spans_first, spans_second) >= MIN_HALF_SPEECH_SPANS):
         # Halves, not smaller parts: a sixth of an episode (~90 cues) locked onto wrong peaks a minute away on Ghosts
         # S05E07, halves (~260 cues) never did on the 17 S05 tracks; a frame-rate fault needs the full reach.
         drift = _offset_ms(speech, second, n)[0] - _offset_ms(speech, first, n)[0]
