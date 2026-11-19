@@ -140,6 +140,8 @@ for lang in ("fr", "en"):
         words += len(r)
         if len(samples) < 2:
             samples.append({"ref": refs[n], "hyp": hyp.strip()})
+        if (names.index(n) + 1) % 10 == 0:
+            print(f"  {lang} {names.index(n) + 1}/{len(names)} clips, RTF so far {proc_s / audio_s:.3f}", flush=True)
     result[f"wer_{lang}"] = round(100 * errs / words, 1)
     result[f"rtf_clips_{lang}"] = round(proc_s / audio_s, 3)
     result[f"clips_{lang}"] = f"{len(names)} clips, {audio_s/60:.1f} min"

@@ -91,7 +91,7 @@ https://opensubtitles.stoplight.io before relying on them.
 | Stage | Candidate | Why | Footprint (approx.) |
 |---|---|---|---|
 | ASR, default | Whisper **large-v3-turbo** (`turbo`), faster-whisper ≥ 1.2, int8, `vad_filter=True`, 4 threads | near large-v3 quality, 99 languages, word timestamps | ~1.5–2 GB RAM |
-| ASR, fast path for its 25 European languages | **NVIDIA Parakeet TDT 0.6B v3** via `onnx-asr` (CPU, int8) | reported much faster than Whisper on CPU with timestamps (https://github.com/istupakov/onnx-asr; speeds are vendor/blog claims) | ~1–2 GB |
+| ASR, fast path for its 25 European languages | **NVIDIA Parakeet TDT 0.6B v3** via `onnx-asr` (CPU, int8) | reported much faster than Whisper on CPU with timestamps (https://github.com/istupakov/onnx-asr; speeds are vendor/blog claims) | ~1–2 GB · **Measured 2026-11-19: not adopted** (French WER 8.0 % vs turbo 3.8 %, no language detection or segment confidence; 2.5–4.7× faster on long audio): D-0004 |
 | Translation, default | **TranslateGemma 4B** GGUF on `llama.cpp` server, Q8_0 (or Q4_K_M) | translation-tuned Gemma 3, 55 languages (https://arxiv.org/pdf/2601.09012); Q4_K_M matched bf16 on 47/74 test sentences vs 71/74 for Q8_0 (https://huggingface.co/bullerwins/translategemma-4b-it-GGUF) | 4.1 GB (Q8) / 2.5 GB (Q4) |
 | Translation, challengers | Tencent **HY-MT1.5-1.8B** (smaller, faster), Qwen3-4B-Instruct (general), NLLB-200-distilled-1.3B on CTranslate2 (fast, no context, CC-BY-NC: personal use only) | compared in https://arxiv.org/html/2602.11961 | 1–3 GB |
 | Re-timing | `ffsubsync` | aligns a subtitle to the audio track | light |
