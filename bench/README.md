@@ -20,7 +20,7 @@ before the winget install still finds it).
 |---|---|
 | `make_fixtures.py` | Seeds the edge cases that bit SubStudio: no audio, PGS-only, non-ASCII name, cp1252 sidecar, subs past the end, zero bytes. Synthetic sources only. `python -m bench.make_fixtures <dir>` |
 | `make_clips.py` | Cuts bench clips from a manifest: `clip.mkv` (360p, no subtitle stream), `audio.wav` (16 kHz mono), optional `ref.<lang>.srt`. Sources are only read. |
-| `measure.py` | Runs a command; records minutes, peak RAM, peak and mean CPU in threads, and `within_budget`. `--watch llama-server.exe` adds a server process that does the real work. |
+| `measure.py` | Runs a command; records minutes, peak RAM, peak / sustained (p95 of 1-s means) / mean CPU in threads, and `within_budget`. `--watch llama-server.exe` adds a server process that does the real work. |
 | `score.py` | chrF of a candidate against a human reference, appended as one row to `bench/results/results.jsonl`. |
 | `asr_bench.py` | Speech-to-text candidates, one engine per process (`--engine whisper:large-v3-turbo` or `parakeet`, 4 threads): WER on public labelled clips (`<media>/fr`, `<media>/en` with `refs.json`), RTF on clips and on each `<media>/*_long.mp3`, load time, peak RAM, appended to `--out`. Prints a line every 10 clips. Extra deps for Parakeet: `onnx-asr onnxruntime`. Result: `results/asr.jsonl`, `doc/decisions/D-0004`. |
 | `asr_smoke.py` | Runs the production `VideoTranscriber` on a folder of test videos: no audio and silence must raise their named errors, speech must give a language, speech spans, words and a valid cue list; a re-run on two spans must stay inside them; no temp wav may be left. `python bench/asr_smoke.py <videos dir>` (loads turbo: take `heavy`). |
@@ -50,7 +50,12 @@ added to a manifest entry's `refs`, the clips measure speed and footprint, not q
 **Reading a row:** `chrf_window` is the headline (text quality and timing within 30 s windows, robust to a
 different cue split); `chrf_doc` is text only; `chrf_cue` exists only when cue counts match (translation of a human
 file); `ref_windows_covered` is the share of the reference's speech windows where the candidate shows anything.
-`within_budget: false` disqualifies a candidate as a default, whatever its score.
+`within_budget: false` disqualifies a candidate as a default, whatever its score. It is judged on RAM peak ≤ 7 GB
+and **sustained** CPU, `p95_cpu_threads` ≤ 4: the 95th percentile of the CPU use averaged over 1-s windows (D-0001,
+clarified 2026-11-19: « 4 threads » is the runner's own setting and its sustained load). `peak_cpu_threads`, the
+highest single sample, stays in the row for information: Whisper turbo set to 4 threads peaks at 4.06–4.09 for an
+instant (its Python thread, an ffmpeg decode) while averaging 3.2–3.5. Re-run under this rule (S05E07 clip,
+2026-11-19, a busier PC): p95 3.63, peak 3.97, mean 2.71 threads, 1.9 GB, 5.7 min: within budget.
 
 First measurement, 2026-11-19: cutting the three clips took 5.0 min, peak 2.88 threads, 0.17 GB (an encoder-only
 `-threads 4` had peaked at 4.5 threads; decoder and encoder are now capped at 2 each).

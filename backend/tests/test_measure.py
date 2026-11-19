@@ -3,7 +3,7 @@ import sys
 
 import pytest
 
-from bench.measure import measure
+from bench.measure import measure, sustained_threads
 
 # Holds ~300 MB and keeps one core busy for about 1.5 s.
 _WORKLOAD = ("import time\n"
@@ -72,3 +72,41 @@ def test_processes_that_never_coexist_are_not_summed():
 def test_failed_command_keeps_its_exit_code():
     r = measure([sys.executable, "-c", "import sys; sys.exit(3)"], interval=0.1)
     assert r["exit_code"] == 3
+
+
+# The budget reads sustained use (D-0001 clarified 2026-11-19). Shapes from the turbo runs of 2026-11-19: 0.5 s samples
+# around 3.2-3.5 threads with instants at 4.06-4.09.
+def _whisper_like(n=600):
+    return [4.09 if i % 50 == 7 else 4.06 if i % 50 == 31 else 3.2 + (i % 7) * 0.05 for i in range(n)]
+
+
+def test_an_instant_over_4_threads_is_within_budget():
+    samples = _whisper_like()
+    assert max(samples) > 4.0
+    assert sustained_threads(samples, 0.5) <= 4.0
+
+
+def test_a_few_whole_seconds_over_4_threads_are_within_budget():
+    samples = _whisper_like()
+    samples[100:102] = samples[400:402] = [4.3, 4.3]  # 2 of 300 one-second windows (< 5 %): a burst, not a setting
+    assert sustained_threads(samples, 0.5) <= 4.0
+
+
+def test_a_runner_set_to_more_threads_is_over_budget():
+    assert sustained_threads([5.0 + (i % 3) * 0.1 for i in range(600)], 0.5) > 4.0
+
+
+def test_over_4_threads_for_more_than_5_percent_of_the_time_is_over_budget():
+    samples = _whisper_like()
+    for i in range(0, 600, 10):  # one 1-s window in five at 4.5 threads: 20 % of the time over budget
+        samples[i:i + 2] = [4.5, 4.5]
+    assert sustained_threads(samples, 0.5) > 4.0
+
+
+def test_the_row_keeps_the_raw_peak_and_judges_the_sustained_use(monkeypatch):
+    r = measure([sys.executable, "-c", _WORKLOAD], interval=0.1)
+    assert {"peak_cpu_threads", "p95_cpu_threads"} <= r.keys()
+    assert r["p95_cpu_threads"] <= r["peak_cpu_threads"]
+    import bench.measure as m
+    monkeypatch.setattr(m, "sustained_threads", lambda *a, **k: 4.5)
+    assert m.measure([sys.executable, "-c", "pass"], interval=0.1)["within_budget"] is False
