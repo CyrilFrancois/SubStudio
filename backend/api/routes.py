@@ -11,16 +11,17 @@ from fastapi.responses import StreamingResponse
 from . import library
 from .config import MEDIA_ROOT, STUB
 from .events_hub import hub
+from .job_runner import job_runner
+from .job_store import job_store, overlay
 from .schemas import (CueList, EventFrame, EventFrameDoc, Job, JobCreate, JobCreateResponse, JobEvent,
-                      JobList, LibraryResponse, Settings, SettingsResponse, SystemStatus)
+                      JobList, LibraryResponse, LogEvent, Settings, SettingsResponse, SystemStatus)
 from .settings_store import load_settings, provider_status, save_settings
 
 logger = logging.getLogger("SubStudio.API")
 router = APIRouter(prefix="/api", tags=["ui"])
 
-# Until task 2 (job store) lands, the real backend has no job model to expose. Saying so beats an
-# empty queue that looks like « nothing to do ».
-NO_JOB_STORE = "The job queue is not built yet (SubStudio task « job store »); run with SUBSTUDIO_API_STUB=1 to try the screens."
+# A queue nobody runs would look like « waiting »: until main.py has connected the runner, refuse to queue.
+NOT_CONNECTED = "The pipeline is not connected to the job queue yet (backend still starting?); try again in a moment."
 
 _last_library: Optional[LibraryResponse] = None
 
@@ -51,42 +52,52 @@ async def get_library():
         logger.error(f"Library scan failed: {e}")
         raise HTTPException(status_code=500, detail=f"Could not read the media folder: {e.strerror or e}")
     _last_library = lib
-    return _stub().overlay(lib) if STUB else lib
+    return _stub().overlay(lib) if STUB else overlay(lib, job_store().list())
 
 
 # --- Jobs ------------------------------------------------------------------------------------
 
 @router.post("/jobs", response_model=JobCreateResponse)
 async def create_jobs(req: JobCreate):
-    if not STUB:
-        raise HTTPException(status_code=501, detail=NO_JOB_STORE)
+    if STUB:
+        lib = _last_library or await get_library()
+        return _stub().create(req, lib)
+    if not job_runner.connected:
+        raise HTTPException(status_code=503, detail=NOT_CONNECTED)
     lib = _last_library or await get_library()
-    return _stub().create(req, lib)
+    created = await asyncio.to_thread(job_store().create, req, lib)
+    job_runner.kick()
+    return created
 
 
 @router.get("/jobs", response_model=JobList)
 async def list_jobs():
-    if not STUB:
-        raise HTTPException(status_code=501, detail=NO_JOB_STORE)
-    return JobList(jobs=_stub().list())
+    return JobList(jobs=_stub().list() if STUB else await asyncio.to_thread(job_store().list))
 
 
 @router.delete("/jobs/{job_id}", response_model=Job)
 async def cancel_job(job_id: str):
-    if not STUB:
-        raise HTTPException(status_code=501, detail=NO_JOB_STORE)
-    job = _stub().cancel(job_id)
+    job = _stub().cancel(job_id) if STUB else job_runner.cancel(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="No such job")
     return job
 
 
+@router.get("/jobs/{job_id}/logs", response_model=List[LogEvent])
+async def job_logs(job_id: str, limit: int = 500):
+    """A job's log lines with the backend's timestamps, oldest first, so a fresh tab shows its history."""
+    if STUB:
+        return []
+    if job_store().get(job_id) is None:
+        raise HTTPException(status_code=404, detail="No such job")
+    return await asyncio.to_thread(job_store().logs, job_id, max(1, min(limit, 2000)))
+
+
 # --- Events ----------------------------------------------------------------------------------
 
 def _snapshot() -> Iterable[EventFrame]:
-    if not STUB:
-        return []
-    return [JobEvent(job=j) for j in _stub().list() if j.state in ("queued", "running")]
+    jobs = _stub().list() if STUB else job_store().active()
+    return [JobEvent(job=j) for j in jobs if j.state in ("queued", "running")]
 
 
 @router.get("/events", response_model=None, responses={200: {
