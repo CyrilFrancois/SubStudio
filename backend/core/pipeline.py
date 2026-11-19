@@ -20,7 +20,7 @@ from .gate import detect_speech, evaluate, read_audio
 from .gate.speech import SAMPLE_RATE
 from .jobs import JobAborted, job_registry
 from .ladder import Ladder, LadderDeps
-from .output import current_path, write_run
+from .output import current_path, subtitle_streams, verdict_record, write_run
 from .provenance import substudio_track_title
 from .scanner import VideoScanner
 from .subtitle_processor import SubtitleProcessor
@@ -159,7 +159,9 @@ class PipelineOrchestrator:
         if cell.state == CellState.PASSED:  # kept or downloaded at rungs 1–2: a human text, left as written
             logger.info(f"✅ {p} {cell.summary()}")
             return
-        event_manager.emit(run.path, "translating", 50, f"{p} Step 4/5: {lang_code.upper()}...")
+        # No « translating » frame yet: the ladder may still transcribe for this cell, and the stepper shows the stage
+        # that really runs (the first batch, or the transcriber's own frames).
+        logger.info(f"{p} Step 4/5: {lang_code.upper()}...")
 
         def on_batch(done: int, total_cues: int):
             event_manager.emit(run.path, "translating", 40 + int(done / total_cues * 40),
@@ -189,6 +191,22 @@ class PipelineOrchestrator:
         result = await asyncio.to_thread(write_run, run, job)
         if result is not None:
             logger.info(f"{p} {result.status}: {result.path.name}")
+        await asyncio.to_thread(self._record_verdicts, run, result)
+
+    @staticmethod
+    def _record_verdicts(run: VideoRun, result) -> None:
+        """The gate's verdicts on the pre-existing subtitles, recorded for the file as it is now (after the swap:
+        new name, mtime and size), so the Library shows them kept or rejected instead of « not checked yet »."""
+        if not run.judged:
+            return
+        from api.job_store import job_store
+        path = current_path(run)
+        try:
+            subs = result.subs if result is not None and result.status == "updated" else subtitle_streams(path)
+            job_store().record_verdicts(str(path), os.stat(path), verdict_record(run, subs))
+        except Exception as e:
+            # The video is written; only the Library's « kept / rejected » label is lost, and a rerun re-checks.
+            logger.error(f"Could not record the quality verdicts of {path.name}: {e}")
 
     def _emit_outcome(self, run: VideoRun, p: str, name: str):
         summary = run.summary()

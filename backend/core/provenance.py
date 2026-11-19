@@ -1,4 +1,4 @@
-# provenance.py — The one rule for « made and validated by the current SubStudio »: track title, origin tag, file-name marker. Exports: TRACK_TITLE_PREFIX, ORIGIN_TAG, ORIGINS, OV, substudio_track_title, track_key, is_substudio_track, name_marker, parse_name_marker, strip_name_marker.
+# provenance.py — The one rule for « made and validated by the current SubStudio »: track title, origin tag, file-name marker. Exports: TRACK_TITLE_PREFIX, ORIGIN_TAG, ORIGINS, REJECTED, OV, substudio_track_title, track_key, is_substudio_track, name_marker, parse_name_marker, strip_name_marker.
 #
 # Read by the Library (coverage), the planner (what is missing) and the muxer (what title to write),
 # so the three can never disagree. Anything this rule does not recognise is « existing »: by default
@@ -18,6 +18,8 @@ _TITLE_RE = re.compile(r"^SubStudio [a-z]{2}$")
 # ffprobe returns it under tags; a track without it is ours but of unrecorded origin.
 ORIGIN_TAG = "SUBSTUDIO_ORIGIN"
 ORIGINS = ("kept", "downloaded", "translated", "transcribed")
+# Verdict-record value of a pre-existing subtitle the quality gate refused (an accepted one carries its origin).
+REJECTED = "rejected"
 
 # « Original version »: the language of the audio, a wanted-language entry like "fr" but resolved per video.
 OV = "ov"

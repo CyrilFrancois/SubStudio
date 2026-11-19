@@ -70,12 +70,77 @@ def test_stepper_moves_forward_never_backwards_and_closes_on_finish(store):
     store.set_stage(job.id, "translate", "running", 0.2)       # a late, lower frame never moves the bar back
     j = store.get(job.id)
     assert stage_states(j) == {"check": "done", "download": "skipped", "transcribe": "skipped",
-                               "correct": "skipped", "translate": "running", "write": "pending"}
+                               "translate": "running", "write": "pending"}
     assert [s.progress for s in j.stages if s.stage == "translate"] == [0.5]
     j = store.finish(job.id, "failed", "FR failed: no subtitle anywhere.")
     assert j.state == "failed" and j.error == "FR failed: no subtitle anywhere." and j.finished_at
     assert stage_states(j)["translate"] == "failed" and stage_states(j)["write"] == "skipped"
     assert store.set_stage(job.id, "write", "running") is None   # a finished job is never reopened
+
+
+def test_one_stage_runs_at_a_time_when_the_ladder_transcribes_after_a_translation_began(store):
+    # Seen on S05E12, 2026-11-19: translate « running » and transcribe « running » together.
+    job = store.create(JobCreate(video_ids=["a"]), library(video("a", {"fr": "missing"}))).jobs[0]
+    store.start(job.id)
+    store.set_stage(job.id, "translate", "running", 0.3)
+    store.set_stage(job.id, "transcribe", "running", 0.1)
+    j = store.get(job.id)
+    assert [s.stage for s in j.stages if s.state == "running"] == ["transcribe"]
+    assert [(s.state, s.progress) for s in j.stages if s.stage == "translate"] == [("pending", 0.3)]
+    store.set_stage(job.id, "translate", "running", 0.2)       # resumes; its bar never goes back
+    assert [(s.state, s.progress) for s in store.get(job.id).stages if s.stage == "translate"] == [("running", 0.3)]
+    store.set_stage(job.id, "transcribe", "running", 0.5)
+    store.set_stage(job.id, "write", "running")                 # a stage paused with progress closes as done
+    assert stage_states(store.get(job.id)) == {"check": "skipped", "download": "skipped", "transcribe": "done",
+                                               "translate": "done", "write": "running"}
+
+
+def test_no_correct_stage_and_old_jobs_read_without_it(tmp_path):
+    import json as _json
+    import sqlite3
+    db = tmp_path / "jobs.sqlite3"
+    con = sqlite3.connect(db)                                  # a store from before batch_id and D-0005
+    con.executescript("""CREATE TABLE jobs (id TEXT PRIMARY KEY, video_id TEXT NOT NULL, video_path TEXT NOT NULL,
+        video_name TEXT NOT NULL, languages TEXT NOT NULL, options TEXT NOT NULL, state TEXT NOT NULL,
+        stages TEXT NOT NULL, created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, error TEXT);""")
+    old = [{"stage": s, "state": "pending", "progress": 0.0} for s in
+           ("check", "download", "transcribe", "correct", "translate", "write")]
+    con.execute("INSERT INTO jobs VALUES ('old','a','/data/a.mkv','a.mkv',?,'{}','running',?,"
+                "'2026-11-19T10:00:00+00:00',NULL,NULL,NULL)", (_json.dumps(["fr"]), _json.dumps(old)))
+    con.commit()
+    con.close()
+    s = JobStore(db)
+    assert "correct" not in STAGES and s.get("old").batch_id is None
+    assert [st.stage for st in s.get("old").stages] == list(STAGES)
+    s.set_stage("old", "translate", "running", 0.5)            # by name, not by position in the old list
+    assert stage_states(s.get("old"))["translate"] == "running"
+    s.close()
+
+
+def test_one_request_is_one_batch(store):
+    lib = library(*(video(v, {"fr": "missing"}) for v in "abc"))
+    first = store.create(JobCreate(video_ids=["a", "b"]), lib).jobs
+    second = store.create(JobCreate(video_ids=["c"]), lib).jobs
+    assert first[0].batch_id and first[0].batch_id == first[1].batch_id != second[0].batch_id
+    store.start(first[0].id)
+    store.finish(first[0].id, "done")
+    assert store.get(first[0].id).batch_id == first[0].batch_id    # finished jobs still count in « x of N »
+
+
+def test_log_lines_carry_the_level_once():
+    import logging
+    from core.events import setup_logging_bridge
+    seen = []
+    hook = lambda fid, payload: seen.append(payload)
+    event_manager.add_listener(hook)
+    h = setup_logging_bridge("/data/x.mkv")
+    try:
+        logging.getLogger("SubStudio.test").error("boom")
+    finally:
+        logging.getLogger().removeHandler(h)
+        event_manager.remove_listener(hook)
+    logs = [p for p in seen if p.get("type") == "log"]
+    assert [(p["level"], p["message"]) for p in logs] == [("ERROR", "boom")]   # not « ERROR: boom »
 
 
 def test_restart_keeps_history_and_queue_and_fails_what_was_running(tmp_path):
@@ -216,7 +281,7 @@ def test_runner_runs_a_job_to_done_with_stages_and_logs(store):
     job = run_job(store, orch, JobOptions(force_asr=True, sync_offset_ms=250))
     assert job.state == "done" and job.error is None
     assert stage_states(job) == {"check": "done", "download": "skipped", "transcribe": "skipped",
-                                 "correct": "skipped", "translate": "done", "write": "done"}
+                                 "translate": "done", "write": "done"}
     assert orch.seen == [(["fr"], "whisper", 0.25)]                # options reach the pipeline
     assert [l.message for l in store.logs(job.id)] == ["INFO: two subtitles found"]
     assert job_registry.get("/data/a.mkv") is None                  # released after the run
