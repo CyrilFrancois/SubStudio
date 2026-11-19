@@ -1,4 +1,4 @@
-// api.gen.ts — GENERATED from backend/api by scripts/gen-types.mjs; do not edit. Exports: paths, components.
+// api.gen.ts — GENERATED from src/lib/openapi.json by scripts/gen-types.mjs; do not edit. Exports: paths, components.
 export interface paths {
     "/api/events": {
         parameters: {
@@ -391,7 +391,7 @@ export interface components {
             id: string;
             /**
              * Marker Languages
-             * @description Languages the file name claims, '(Sub-OV,EN)' -> ['ov','en'].
+             * @description Languages the file name claims, '(Sub-EN,FR)' -> ['en','fr']; a claim, not a proof.
              */
             marker_languages?: string[] | null;
             /**

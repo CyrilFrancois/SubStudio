@@ -98,3 +98,45 @@ def test_unreadable_file_is_unknown_not_missing(root):
     garbage = lib["garbage.mkv"]
     assert garbage.coverage[0].state == "unknown"
     assert garbage.probe_error.startswith("Not readable as a video (") and "@ 0" not in garbage.probe_error
+
+
+# --- reviewer findings, 2026-11-19 ------------------------------------------------------------
+
+def test_a_sidecar_never_belongs_to_a_video_whose_name_is_its_prefix(root):
+    _mkv(root / "Alien.mkv", audio_lang="eng")
+    _mkv(root / "Aliens.mkv", audio_lang="eng")
+    (root / "Aliens.fr.srt").write_text(SRT, encoding="utf-8")
+    lib = _scan(["fr"], count_existing=True)
+    assert lib["Alien.mkv"].tracks == [] and lib["Alien.mkv"].coverage[0].state == "missing"
+    assert lib["Aliens.mkv"].coverage[0].state == "passed"
+
+
+def test_hearing_impaired_flag_is_not_hindi(root):
+    _mkv(root / "Movie.mkv", audio_lang="eng")
+    (root / "Movie.HI.en.srt").write_text(SRT, encoding="utf-8")
+    (root / "Movie.hi.srt").write_text(SRT, encoding="utf-8")
+    langs = sorted(t.language for t in _scan(["en"])["Movie.mkv"].tracks)
+    assert langs == ["en", "hi"]  # the lone « hi » stays Hindi; « HI » beside « en » is a flag
+
+
+def test_substudio_title_must_agree_with_the_language_tag(root):
+    _mkv(root / "ep.mkv", audio_lang="eng", subs=[("eng", "SubStudio fr", "translated")])
+    v = _scan(["en", "fr"])["ep.mkv"]
+    assert [c.state for c in v.coverage] == ["missing", "missing"]
+    assert "title says fr" in v.tracks[0].reason
+
+
+def test_an_unreadable_subs_folder_is_a_warning_not_a_failure(root, monkeypatch):
+    _mkv(root / "ep.mkv", audio_lang="eng")
+    (root / "Subs").mkdir()
+    real = os.listdir
+
+    def deny(path):
+        if os.path.basename(str(path)) == "Subs":
+            raise PermissionError(13, "Permission denied", str(path))
+        return real(path)
+
+    monkeypatch.setattr(library.os, "listdir", deny)
+    lib = library.scan_library(Settings(languages=["en"]))
+    assert [v.name for v in lib.videos] == ["ep.mkv"]
+    assert any("Cannot read folder" in w and "Subs" in w for w in lib.warnings)

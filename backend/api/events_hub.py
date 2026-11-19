@@ -30,8 +30,13 @@ class EventHub:
             running = None
         if running is loop:
             self._deliver(frame)
-        else:
+            return
+        try:
             loop.call_soon_threadsafe(self._deliver, frame)
+        except RuntimeError:
+            # The loop that last served a subscriber is closed (server restarted under --reload):
+            # nobody can be listening on it, and the job that published must not fail for that.
+            self._loop = None
 
     def _deliver(self, frame: EventFrame):
         for q in list(self._subscribers):

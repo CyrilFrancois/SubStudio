@@ -1,0 +1,1434 @@
+{
+  "components": {
+    "schemas": {
+      "Cue": {
+        "properties": {
+          "end_ms": {
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "id": {
+            "description": "Position in the source cue list; the translator keys on it.",
+            "title": "Id",
+            "type": "integer"
+          },
+          "source_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The cue it was translated from, when translated.",
+            "title": "Source Text"
+          },
+          "start_ms": {
+            "title": "Start Ms",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "start_ms",
+          "end_ms",
+          "text"
+        ],
+        "title": "Cue",
+        "type": "object"
+      },
+      "CueList": {
+        "properties": {
+          "cues": {
+            "items": {
+              "$ref": "#/components/schemas/Cue"
+            },
+            "title": "Cues",
+            "type": "array"
+          },
+          "language": {
+            "title": "Language",
+            "type": "string"
+          },
+          "origin": {
+            "enum": [
+              "kept",
+              "downloaded",
+              "translated",
+              "transcribed",
+              "existing"
+            ],
+            "title": "Origin",
+            "type": "string"
+          },
+          "reviewed": {
+            "default": false,
+            "title": "Reviewed",
+            "type": "boolean"
+          },
+          "video_id": {
+            "title": "Video Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "video_id",
+          "language",
+          "origin",
+          "cues"
+        ],
+        "title": "CueList",
+        "type": "object"
+      },
+      "EventFrameDoc": {
+        "description": "Documents the SSE payload for OpenAPI: each `data:` line is one of these, discriminated by `kind`.",
+        "properties": {
+          "frame": {
+            "discriminator": {
+              "mapping": {
+                "job": "#/components/schemas/JobEvent",
+                "library": "#/components/schemas/LibraryChangedEvent",
+                "log": "#/components/schemas/LogEvent"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/JobEvent"
+              },
+              {
+                "$ref": "#/components/schemas/LogEvent"
+              },
+              {
+                "$ref": "#/components/schemas/LibraryChangedEvent"
+              }
+            ],
+            "title": "Frame"
+          }
+        },
+        "required": [
+          "frame"
+        ],
+        "title": "EventFrameDoc",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "Job": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "One sentence a person understands, when state is 'failed'.",
+            "title": "Error"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "languages": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Languages",
+            "type": "array"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Place in the queue (0 = next); null once started.",
+            "title": "Position"
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/StageProgress"
+            },
+            "title": "Stages",
+            "type": "array"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "state": {
+            "enum": [
+              "queued",
+              "running",
+              "done",
+              "failed",
+              "cancelled"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "video_id": {
+            "title": "Video Id",
+            "type": "string"
+          },
+          "video_name": {
+            "title": "Video Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "video_id",
+          "video_name",
+          "languages",
+          "state",
+          "stages",
+          "created_at"
+        ],
+        "title": "Job",
+        "type": "object"
+      },
+      "JobCreate": {
+        "properties": {
+          "languages": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null = every wanted language that is missing for each video ('Fill missing').",
+            "title": "Languages"
+          },
+          "options": {
+            "$ref": "#/components/schemas/JobOptions",
+            "default": {
+              "force_asr": false,
+              "sync_offset_ms": 0
+            }
+          },
+          "video_ids": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Video Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "video_ids"
+        ],
+        "title": "JobCreate",
+        "type": "object"
+      },
+      "JobCreateResponse": {
+        "properties": {
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/Job"
+            },
+            "title": "Jobs",
+            "type": "array"
+          },
+          "skipped": {
+            "description": "Video ids with nothing missing in the requested languages.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Skipped",
+            "type": "array"
+          }
+        },
+        "required": [
+          "jobs",
+          "skipped"
+        ],
+        "title": "JobCreateResponse",
+        "type": "object"
+      },
+      "JobEvent": {
+        "properties": {
+          "job": {
+            "$ref": "#/components/schemas/Job"
+          },
+          "kind": {
+            "const": "job",
+            "default": "job",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job"
+        ],
+        "title": "JobEvent",
+        "type": "object"
+      },
+      "JobList": {
+        "properties": {
+          "jobs": {
+            "description": "Running first, then queued by position, then history newest first.",
+            "items": {
+              "$ref": "#/components/schemas/Job"
+            },
+            "title": "Jobs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "jobs"
+        ],
+        "title": "JobList",
+        "type": "object"
+      },
+      "JobOptions": {
+        "description": "The 'Advanced' overrides of one video; every field defaults to 'let the ladder decide'.",
+        "properties": {
+          "force_asr": {
+            "default": false,
+            "description": "Ignore every existing subtitle and transcribe.",
+            "title": "Force Asr",
+            "type": "boolean"
+          },
+          "source_track": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Path or 'stream:N' of the subtitle to translate from.",
+            "title": "Source Track"
+          },
+          "sync_offset_ms": {
+            "default": 0,
+            "description": "Milliseconds added to every cue; positive = later.",
+            "title": "Sync Offset Ms",
+            "type": "integer"
+          }
+        },
+        "title": "JobOptions",
+        "type": "object"
+      },
+      "LanguageCoverage": {
+        "properties": {
+          "from_language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "For translated/transcribed+translated: the source language.",
+            "title": "From Language"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when state is queued/running/failed.",
+            "title": "Job Id"
+          },
+          "language": {
+            "description": "The wanted language as in Settings, 'ov' included.",
+            "title": "Language",
+            "type": "string"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "enum": [
+                  "kept",
+                  "downloaded",
+                  "translated",
+                  "transcribed",
+                  "existing"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when state is 'passed'; null = a SubStudio track of unrecorded origin.",
+            "title": "Origin"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Sidecar path when the subtitle is a file.",
+            "title": "Path"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "One sentence: why it failed, why it is unknown, or what was ignored.",
+            "title": "Reason"
+          },
+          "resolved": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "For 'ov': the audio's language when known ('en'); else equals language.",
+            "title": "Resolved"
+          },
+          "rung": {
+            "anyOf": [
+              {
+                "enum": [
+                  "existing",
+                  "download",
+                  "translate",
+                  "asr"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when known (from the job's cell verdict).",
+            "title": "Rung"
+          },
+          "state": {
+            "enum": [
+              "passed",
+              "missing",
+              "pending",
+              "running",
+              "failed",
+              "unknown"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "language",
+          "state"
+        ],
+        "title": "LanguageCoverage",
+        "type": "object"
+      },
+      "LibraryChangedEvent": {
+        "description": "Coverage of these videos changed (a job wrote a subtitle): refetch the library.",
+        "properties": {
+          "kind": {
+            "const": "library",
+            "default": "library",
+            "title": "Kind",
+            "type": "string"
+          },
+          "video_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Video Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "video_ids"
+        ],
+        "title": "LibraryChangedEvent",
+        "type": "object"
+      },
+      "LibraryResponse": {
+        "properties": {
+          "languages": {
+            "description": "The wanted languages the coverage was computed for.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Languages",
+            "type": "array"
+          },
+          "root": {
+            "title": "Root",
+            "type": "string"
+          },
+          "scanned_at": {
+            "format": "date-time",
+            "title": "Scanned At",
+            "type": "string"
+          },
+          "videos": {
+            "items": {
+              "$ref": "#/components/schemas/LibraryVideo"
+            },
+            "title": "Videos",
+            "type": "array"
+          },
+          "warnings": {
+            "description": "Folders or files that could not be read; shown, never dropped silently.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "root",
+          "languages",
+          "scanned_at",
+          "videos",
+          "warnings"
+        ],
+        "title": "LibraryResponse",
+        "type": "object"
+      },
+      "LibraryVideo": {
+        "properties": {
+          "audio_language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Language tag of the first audio track (OV), null when untagged.",
+            "title": "Audio Language"
+          },
+          "coverage": {
+            "description": "One entry per wanted language, in Settings order.",
+            "items": {
+              "$ref": "#/components/schemas/LanguageCoverage"
+            },
+            "title": "Coverage",
+            "type": "array"
+          },
+          "duration_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Seconds; null when ffprobe could not read it.",
+            "title": "Duration S"
+          },
+          "folder": {
+            "description": "Folder relative to the media root, '' for the root itself; '/' separated.",
+            "title": "Folder",
+            "type": "string"
+          },
+          "id": {
+            "description": "Stable id derived from the path; use it in every URL instead of the path.",
+            "title": "Id",
+            "type": "string"
+          },
+          "marker_languages": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Languages the file name claims, '(Sub-EN,FR)' -> ['en','fr']; a claim, not a proof.",
+            "title": "Marker Languages"
+          },
+          "mtime": {
+            "format": "date-time",
+            "title": "Mtime",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "probe_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when ffprobe failed: coverage is then unknown, not missing.",
+            "title": "Probe Error"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "tracks": {
+            "description": "Every subtitle found, counted or not.",
+            "items": {
+              "$ref": "#/components/schemas/SubtitleTrack"
+            },
+            "title": "Tracks",
+            "type": "array"
+          },
+          "validated": {
+            "description": "Every wanted language passed as a SubStudio track: Start skips this video.",
+            "title": "Validated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "name",
+          "folder",
+          "size_bytes",
+          "mtime",
+          "validated",
+          "coverage",
+          "tracks"
+        ],
+        "title": "LibraryVideo",
+        "type": "object"
+      },
+      "LogEvent": {
+        "properties": {
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null for system-wide lines.",
+            "title": "Job Id"
+          },
+          "kind": {
+            "const": "log",
+            "default": "log",
+            "title": "Kind",
+            "type": "string"
+          },
+          "level": {
+            "enum": [
+              "DEBUG",
+              "INFO",
+              "WARNING",
+              "ERROR"
+            ],
+            "title": "Level",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "ts": {
+            "description": "When the backend emitted the line, not when the browser received it.",
+            "format": "date-time",
+            "title": "Ts",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ts",
+          "level",
+          "message"
+        ],
+        "title": "LogEvent",
+        "type": "object"
+      },
+      "ProviderStatus": {
+        "properties": {
+          "configured": {
+            "description": "A key is set; the value itself is never sent.",
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "configured"
+        ],
+        "title": "ProviderStatus",
+        "type": "object"
+      },
+      "Settings": {
+        "description": "D-0002: languages are the only choice on the main path; the output is always the source file,\nreplaced in place after the check, renamed with '(Sub-OV,EN,FR)'.",
+        "properties": {
+          "count_existing": {
+            "default": false,
+            "description": "Count subtitles not made by this SubStudio (core/provenance.py) as coverage. Off: listed, not trusted.",
+            "title": "Count Existing",
+            "type": "boolean"
+          },
+          "languages": {
+            "description": "Wanted languages, 'ov' included: the only list every picker reads.",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Languages",
+            "type": "array"
+          }
+        },
+        "required": [
+          "languages"
+        ],
+        "title": "Settings",
+        "type": "object"
+      },
+      "SettingsResponse": {
+        "properties": {
+          "providers": {
+            "items": {
+              "$ref": "#/components/schemas/ProviderStatus"
+            },
+            "title": "Providers",
+            "type": "array"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/Settings"
+          }
+        },
+        "required": [
+          "settings",
+          "providers"
+        ],
+        "title": "SettingsResponse",
+        "type": "object"
+      },
+      "StageProgress": {
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "e.g. which rung was used: 'downloaded from OpenSubtitles'.",
+            "title": "Detail"
+          },
+          "eta_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Seconds left in this stage; null when unknown.",
+            "title": "Eta S"
+          },
+          "progress": {
+            "default": 0,
+            "description": "0..1 within this stage only; never across stages.",
+            "maximum": 1,
+            "minimum": 0,
+            "title": "Progress",
+            "type": "number"
+          },
+          "stage": {
+            "enum": [
+              "check",
+              "download",
+              "transcribe",
+              "correct",
+              "translate",
+              "write"
+            ],
+            "title": "Stage",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "running",
+              "done",
+              "skipped",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage",
+          "state"
+        ],
+        "title": "StageProgress",
+        "type": "object"
+      },
+      "SubtitleTrack": {
+        "description": "One subtitle found for a video, counted as coverage or not (and why).",
+        "properties": {
+          "codec": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codec"
+          },
+          "counted": {
+            "description": "True when this track counts as coverage for its language.",
+            "title": "Counted",
+            "type": "boolean"
+          },
+          "kind": {
+            "enum": [
+              "embedded",
+              "sidecar"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Normalised code; null when the tag is absent or 'und'.",
+            "title": "Language"
+          },
+          "language_tag": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The raw tag as found (ffprobe tag or filename part).",
+            "title": "Language Tag"
+          },
+          "made_by_substudio": {
+            "default": false,
+            "description": "Carries the SubStudio marker (core/provenance.py).",
+            "title": "Made By Substudio",
+            "type": "boolean"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "enum": [
+                  "kept",
+                  "downloaded",
+                  "translated",
+                  "transcribed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "SubStudio tracks only: the SUBSTUDIO_ORIGIN stream tag, null when not recorded.",
+            "title": "Origin"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Absolute path, sidecar files only.",
+            "title": "Path"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "One sentence when counted is false, e.g. 'not made by this SubStudio (Settings)'.",
+            "title": "Reason"
+          },
+          "stream_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ffprobe stream index, embedded tracks only.",
+            "title": "Stream Index"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "kind",
+          "counted"
+        ],
+        "title": "SubtitleTrack",
+        "type": "object"
+      },
+      "SystemStatus": {
+        "properties": {
+          "cpu_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whole machine, 0..100.",
+            "title": "Cpu Percent"
+          },
+          "cpu_threads_budget": {
+            "default": 4,
+            "description": "D-0001: 4 of 8 threads.",
+            "title": "Cpu Threads Budget",
+            "type": "integer"
+          },
+          "loaded_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loaded Model"
+          },
+          "media_root": {
+            "title": "Media Root",
+            "type": "string"
+          },
+          "ram_budget_mb": {
+            "default": 7168,
+            "description": "D-0001: about half of this 15 GB machine.",
+            "title": "Ram Budget Mb",
+            "type": "integer"
+          },
+          "ram_used_mb": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "This backend process, MB.",
+            "title": "Ram Used Mb"
+          },
+          "stub": {
+            "description": "True when the API serves stub data (SUBSTUDIO_API_STUB=1): the UI must say so.",
+            "title": "Stub",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "stub",
+          "media_root"
+        ],
+        "title": "SystemStatus",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "SubStudio UI API",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/events": {
+      "get": {
+        "operationId": "events_api_events_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventFrameDoc"
+                }
+              }
+            },
+            "description": "text/event-stream; each `data:` line is EventFrameDoc.frame (discriminated by `kind`). On connect: one job frame per unfinished job, then live frames."
+          }
+        },
+        "summary": "Events",
+        "tags": [
+          "ui"
+        ]
+      }
+    },
+    "/api/jobs": {
+      "get": {
+        "operationId": "list_jobs_api_jobs_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Jobs",
+        "tags": [
+          "ui"
+        ]
+      },
+      "post": {
+        "operationId": "create_jobs_api_jobs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobCreateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Jobs",
+        "tags": [
+          "ui"
+        ]
+      }
+    },
+    "/api/jobs/{job_id}": {
+      "delete": {
+        "operationId": "cancel_job_api_jobs__job_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Job",
+        "tags": [
+          "ui"
+        ]
+      }
+    },
+    "/api/library": {
+      "get": {
+        "operationId": "get_library_api_library_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Library",
+        "tags": [
+          "ui"
+        ]
+      }
+    },
+    "/api/settings": {
+      "get": {
+        "operationId": "get_settings_api_settings_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Settings",
+        "tags": [
+          "ui"
+        ]
+      },
+      "put": {
+        "operationId": "put_settings_api_settings_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Settings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Settings",
+        "tags": [
+          "ui"
+        ]
+      }
+    },
+    "/api/subtitles/{video_id}/{lang}": {
+      "get": {
+        "operationId": "get_subtitles_api_subtitles__video_id___lang__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "video_id",
+            "required": true,
+            "schema": {
+              "title": "Video Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "lang",
+            "required": true,
+            "schema": {
+              "title": "Lang",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CueList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Subtitles",
+        "tags": [
+          "ui"
+        ]
+      },
+      "put": {
+        "operationId": "put_subtitles_api_subtitles__video_id___lang__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "video_id",
+            "required": true,
+            "schema": {
+              "title": "Video Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "lang",
+            "required": true,
+            "schema": {
+              "title": "Lang",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CueList"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CueList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Subtitles",
+        "tags": [
+          "ui"
+        ]
+      }
+    },
+    "/api/system": {
+      "get": {
+        "operationId": "system_api_system_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "System",
+        "tags": [
+          "ui"
+        ]
+      }
+    }
+  }
+}
