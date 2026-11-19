@@ -85,7 +85,6 @@ def track_text(video, index):
 def orchestrator(translator):
     orch = main.PipelineOrchestrator()
     orch.translator = translator
-    orch.translator.get_context_profile = lambda name: ""
     return orch
 
 
@@ -165,7 +164,6 @@ def test_retry_is_refused_while_another_job_runs_or_when_the_source_is_gone(clip
     with TestClient(main.app) as client:
         orch = main.orchestrator
         orch.translator = Tag(broken={"fr"})
-        orch.translator.get_context_profile = lambda name: ""
         process(orch, clip, ("de", "fr"))
         body = {"video": {"name": clip.name, "path": str(clip)}, "language": "fr", "globalOptions": {}}
         orch.active_jobs.add("another video")

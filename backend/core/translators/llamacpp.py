@@ -60,11 +60,6 @@ class LlamaCppTranslator:
         self._template: Optional[jinja2.Template] = None
         self.http = httpx.Client(timeout=600)
 
-    def get_context_profile(self, filename: str) -> str:
-        # A 4B translation model asked « what show is this? » invents a cast (architecture review §4.3);
-        # looked-up context replaces it (user-process.md rung 3). Until then: no invented context.
-        return ""
-
     def unload(self) -> None:
         """Free the model's RAM before the next video's transcription (one heavy model at a time, D-0001)."""
         self.server.stop()

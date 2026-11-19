@@ -176,7 +176,8 @@ and lost on restart.
   Choice and numbers: `doc/decisions/D-0003`.
 - `backend/core/translator.py` — `GeminiTranslator`, an optional backend of that contract: Gemini
   REST (`httpx`, no SDK), `thinkingLevel: low`, JSON output with a response schema, 30 cues per
-  call, temperature 0.2. `get_context_profile()` builds a story bible from the filename.
+  call, temperature 0.2. Its context comes from `core/context.get_context` (filename + TVmaze lookup + the
+  names in the source cues, never invented), built per source by the ladder.
   `_generate` raises on any HTTP error, missing candidate, or `finishReason != STOP`.
 - `backend/core/output/` — the only output: `write_run` updates the source **in place** by a verified swap
   (temp file → verify streams, flags, duration, new tracks → atomic rename), adds the `(Sub-EN,FR)` marker of the

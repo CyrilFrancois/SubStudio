@@ -30,7 +30,7 @@ logger = logging.getLogger("SubStudio.Translate")
 class TranslationContext:
     """What a backend may use besides the texts. Only facts; a backend ignores what it cannot use."""
     title: str = ""                                      # e.g. from the filename
-    notes: str = ""                                      # free text (today: the Gemini story bible)
+    notes: str = ""                                      # free text: the looked-up facts (core/context)
     glossary: Sequence[str] = ()                         # names and terms to keep untranslated
     source_lang: Optional[str] = None                    # ISO 639-1 when known
     source_is_asr: bool = False                          # machine-transcribed: may hold phonetic errors
