@@ -25,11 +25,12 @@ from .llama_server import LlamaServer
 logger = logging.getLogger("SubStudio.LocalTranslator")
 
 _HOME = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "SubStudio"
-# The id, then a separator: « | : . ) ] / » or « -> », or only whitespace (NBSP and U+202F included, which French
+# The id, then a separator: « | : . ) ] / – — » or « -> », or only whitespace (NBSP and U+202F included, which French
 # typography puts before « ? ») when the text then starts like a sentence. Shapes seen on Ghosts S05E12 FR
-# (2026-11-19): « 69/afin que… », « 200 le contenu… ». « 272\xa0? Une chambre\xa0? » is NOT read as cue 272's text
+# (2026-11-19): « 69/afin que… », « 200 le contenu… », « 30– et j'ai construit… ». A plain « - » is not one: it
+# opens a dialogue line (« 12 - Oui »), kept as text. « 272\xa0? Une chambre\xa0? » is NOT read as cue 272's text
 # (a reply starting « ? » is not a translation); it stays a wrong answer, so the batch splits down to a plain cue.
-_LINE = re.compile(r"^\s*\[?(\d+)\]?(?:\s*(?:[|:.)\]/]|->)\s*|\s+(?=[^\W\d_]|[«\"“'¿¡-]))(.*)$")
+_LINE = re.compile(r"^\s*\[?(\d+)\]?(?:\s*(?:[|:.)\]/–—]|->)\s*|\s+(?=[^\W\d_]|[«\"“'¿¡-]))(.*)$")
 # A one-cue answer is sent no id; one still put in front, with an explicit separator, is dropped. A reply that starts
 # with the cue's number and then punctuation (« 272\xa0? Une chambre ») is a wrong answer, never a translation.
 _ONE_ID = r"^\s*\[?{id}\]?\s*(?:[|:.)\]/]|->)\s*"

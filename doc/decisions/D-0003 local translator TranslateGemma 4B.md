@@ -71,6 +71,11 @@ Why not the others:
   translation wrapped over two lines; two cues merged: 65 rejected batches). Fixed on `fix/translator-replies`: a
   tolerant parser, a one-cue call in plain text (no id to get wrong), and a cue still wrong alone kept in the
   source language and named instead of discarding the language (`translate_cues(left_in_source=…)`).
+  **Measured after the fix** (same Gestdown English file, 555 cues, shipped path, `bench/translate/episode_replies.py`,
+  16:53 UTC): the French translation **completes, 0 cues left in English**. The model misbehaves as often as before
+  (64 rejected replies, 32 splits vs 65 / 31): 56 are its own merges and empty lines, now absorbed by the split down
+  to a plain one-cue call; only 8 were format, one more shape (« 30– et… ») now read too. 8.5 s/cue was measured
+  under memory pressure (other threads' processes, ~1 GB free): not a speed figure.
 
 - At 5.5 s per cue on a busy PC, a 45-minute episode (~700 cues) takes **about 1 hour per language**: an overnight
   batch, not an interactive one. A quiet-machine measurement is owed before quoting a time to Cyril.
