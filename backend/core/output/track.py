@@ -10,7 +10,7 @@ from typing import List, Optional
 
 from ..provenance import ORIGIN_TAG, REVIEWED_TAG, REVIEWED_YES, substudio_track_title
 from ..subtitles import Cue, SubtitleReadError, parse
-from .inplace import OutputError, _probe
+from .media import OutputError, _probe
 
 
 @dataclass(frozen=True)
