@@ -67,8 +67,8 @@ The new tracks are written **into the video** by a verified swap:
 - **ffmpeg and ffprobe on PATH:** `winget install Gyan.FFmpeg`, then open a new terminal.
 - About 1.6 GB of disk for the Whisper turbo model, downloaded on the first transcription.
 - **For translation (once, about 2.5 GB):** llama.cpp and the TranslateGemma model, in `%LOCALAPPDATA%\SubStudio`
-  (block below). Without them rungs 1, 2 and 4 still work, and a language that needs translating fails with the
-  reason (`LLAMA_SERVER_BIN does not point to a file`).
+  (block below). Without them, kept and downloaded subtitles and a transcript in the spoken language still work;
+  every language that needs translating (a transcript's other languages included) fails with the reason (`LLAMA_SERVER_BIN does not point to a file`).
 
 ## Run it natively (Windows, PowerShell)
 
@@ -147,7 +147,7 @@ Every setting is an environment variable. `.env.example` lists them with their d
 | `SUBSTUDIO_API_STUB` | off | `1` simulates jobs so the UI can be tried without processing anything; the UI shows a banner. |
 | `WHISPER_MODEL` | `turbo` | faster-whisper model name. |
 | `ASR_THREADS` | `4` | CPU threads for transcription (the budget is 4). |
-| `TRANSLATOR` | `local` | `local` (TranslateGemma on llama.cpp, free, on this PC) or `gemini` (cloud, opt-in). |
+| `TRANSLATOR` | `local` | `local` (TranslateGemma on llama.cpp, free, on this PC) or `gemini` (cloud, opt-in). Any other value stops the backend at start. |
 | `LLAMA_SERVER_BIN` | `%LOCALAPPDATA%\SubStudio\llama.cpp\b12532-vulkan\llama-server.exe` | The llama.cpp server the local translator starts. |
 | `LLAMA_MODEL_PATH` | `%LOCALAPPDATA%\SubStudio\models\translategemma-4b-it-Q4_K_M.gguf` | The local translation model. |
 | `LLAMA_GPU_LAYERS` | `99` | Layers on the integrated GPU; `0` = CPU only. |
