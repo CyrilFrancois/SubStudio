@@ -44,7 +44,7 @@ translator.get_context_profile()   → "story bible" from the filename
       ↓
 transcriber.transcribe()           → SRT from audio   (skipped if a sidecar SRT is used)
       ↓
-translator.refine_and_translate()  → translated SRT, 30 blocks per request
+subtitles.translate_cues()         → translated cues: model sees {id, text} only, timings re-attached by id
       ↓
 muxer.mux()                        → {name}_SubStudio.mkv beside the original
 ```
@@ -251,9 +251,10 @@ shifts every timestamp, positive = later, negative = earlier.
 │   │   ├── events.py              # EventManager: thread-safe SSE broadcast
 │   │   ├── muxer.py               # FFmpeg muxing + ISO 639-2 tagging
 │   │   ├── scanner.py             # Recursive walk + subtitle detection
-│   │   ├── subtitle_processor.py  # Timestamp offsetting, embedded extraction
+│   │   ├── subtitles/             # Cue list (read any format/charset, shift, clip, SRT) + Translator contract
+│   │   ├── subtitle_processor.py  # Embedded text-track extraction
 │   │   ├── transcriber.py         # Faster-Whisper + audio extraction
-│   │   └── translator.py          # Story bible + batched translation
+│   │   └── translator.py          # GeminiTranslator (optional backend) + story bible
 │   ├── Dockerfile
 │   ├── main.py                    # FastAPI app + PipelineOrchestrator
 │   └── requirements.txt

@@ -83,7 +83,8 @@ class VideoTranscriber:
                 raise JobAborted(job.file_id)
 
             if process.returncode != 0:
-                logger.error(f"❌ Audio extraction failed: {stderr.decode(errors='ignore')[:400]}")
+                # The tail: ffmpeg prints its version banner first and the actual reason last.
+                logger.error(f"❌ Audio extraction failed: {stderr.decode(errors='ignore').strip()[-400:]}")
                 return ""
             return audio_path
         except JobAborted:

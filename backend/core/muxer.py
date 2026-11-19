@@ -1,13 +1,13 @@
-# muxer.py — VideoMuxer: injects translated SRTs into MKV with ISO 639-2 tags. Exports: VideoMuxer.
+# muxer.py — VideoMuxer: injects translated cue lists into MKV as SRT tracks with ISO 639-2 tags. Exports: VideoMuxer.
 
-import os
-import re
 import logging
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from .jobs import JobHandle, JobAborted
+from .provenance import substudio_track_title
+from .subtitles import Cue, drop_after, to_srt
 
 logger = logging.getLogger("SubStudio.Muxer")
 
@@ -33,50 +33,6 @@ class VideoMuxer:
             logger.warning(f"Could not determine video duration: {e}. Defaulting to large value.")
             return 999999.0
 
-    def srt_time_to_seconds(self, time_str: str) -> float:
-        """Converts SRT timestamp (00:00:00,000) to total seconds."""
-        h, m, s_ms = time_str.split(':')
-        s, ms = s_ms.split(',')
-        return int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000
-
-    def process_srt_content(self, srt_text: str, max_duration: float, max_chars: int = 55) -> str:
-        """
-        1. Splits long lines with \n (Python 3.10 compatible).
-        2. Removes subtitle blocks that start after the video duration.
-        """
-        processed_blocks = []
-        # Pattern for SRT blocks: Index, TimeRange, Content
-        pattern = re.compile(r"(\d+)\n(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})\n([\s\S]*?)(?:\n\n|\Z)")
-        
-        matches = pattern.finditer(srt_text)
-        
-        for match in matches:
-            index, start_time_str, end_time_str, text = match.groups()
-            
-            # Check if subtitle starts after video ends to prevent black screen issues
-            start_seconds = self.srt_time_to_seconds(start_time_str)
-            if start_seconds >= max_duration:
-                continue 
-
-            # Split long lines logic
-            lines = text.strip().split('\n')
-            new_lines = []
-            for line in lines:
-                if len(line) > max_chars:
-                    mid = len(line) // 2
-                    space_indices = [i for i, char in enumerate(line) if char == ' ']
-                    if space_indices:
-                        best_space = min(space_indices, key=lambda x: abs(x - mid))
-                        line = line[:best_space] + '\n' + line[best_space+1:]
-                new_lines.append(line)
-            
-            # Fix for Python < 3.12: Join outside the f-string to avoid backslash error
-            clean_text = '\n'.join(new_lines)
-            processed_blocks.append(f"{index}\n{start_time_str} --> {end_time_str}\n{clean_text}")
-
-        # Join blocks with double newlines and ensure a trailing newline
-        return "\n\n".join(processed_blocks) + "\n\n"
-
     def get_existing_sub_count(self, video_path: Path) -> int:
         """Counts existing subtitle streams in the source file for correct metadata indexing."""
         try:
@@ -93,7 +49,7 @@ class VideoMuxer:
     def mux(
         self,
         video_path: str,
-        srts: Dict[str, str],
+        srts: Dict[str, List[Cue]],
         current_file: int,
         total_files: int,
         strip_existing: bool = False,
@@ -113,8 +69,9 @@ class VideoMuxer:
         # ------------------------------------------------
         # 1. Process and Write temporary SRT files
         # ------------------------------------------------
-        for lang_code, content in srts.items():
-            formatted_content = self.process_srt_content(content, video_duration)
+        for lang_code, cues in srts.items():
+            # Cues starting after the video ends would hold a black frame in the player.
+            formatted_content = to_srt(drop_after(cues, video_duration))
             
             tmp_path = video_input_path.parent / f"{video_input_path.stem}.{lang_code}.tmp.srt"
             with open(tmp_path, "w", encoding="utf-8") as f:
@@ -156,7 +113,7 @@ class VideoMuxer:
                 out_stream_idx = existing_sub_count + index
                 iso_lang = self.lang_map.get(lang_code.lower(), lang_code.lower())
                 cmd += [f"-metadata:s:s:{out_stream_idx}", f"language={iso_lang}"]
-                cmd += [f"-metadata:s:s:{out_stream_idx}", f"title=AI {lang_code.upper()}"]
+                cmd += [f"-metadata:s:s:{out_stream_idx}", f"title={substudio_track_title(lang_code.lower())}"]
 
             cmd += [str(output_path)]
 

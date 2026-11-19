@@ -12,6 +12,7 @@ import os, re, sys, time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backend"))
 from core.transcriber import VideoTranscriber, names_prompt  # noqa: E402
+from core.subtitles import to_srt  # noqa: E402
 
 d = sys.argv[1]
 fails = []
@@ -62,7 +63,7 @@ for name in sorted(os.listdir(d)):
     if expect_error:
         fails.append(f"{name}: expected a named error, got {len(r.segments)} segments")
         continue
-    srt = r.to_srt()
+    srt = to_srt(r.to_cues())
     print(f"[{name}] {dt:.0f}s for {r.duration:.0f}s audio; lang {r.language} ({r.language_probability:.2f}); "
           f"{len(r.speech)} speech spans; {len(r.segments)} segments; "
           f"worst avg_logprob {min(s.avg_logprob for s in r.segments):.2f}")
