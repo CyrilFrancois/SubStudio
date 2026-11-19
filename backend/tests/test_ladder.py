@@ -152,3 +152,44 @@ def test_failed_translation_from_a_human_subtitle_fails_the_cell_without_transcr
     cells = go(run, ladder)
     assert cells["en"]["origin"] == "kept"
     assert cells["fr"]["state"] == "failed" and cells["fr"]["reason"].startswith("fr:") and asr == []
+
+
+def _retry(run, fetched_now, monkeypatch):
+    """A new ladder on the same run, as POST /api/retry builds it, whose search now returns `fetched_now`."""
+    monkeypatch.setattr("core.ladder.load_file", lambda path: cues(FRENCH))
+    calls = []
+
+    def fetch(path, langs, work_dir):
+        calls.append(sorted(langs))
+        return fetched_now
+    deps = LadderDeps(translator=Tag(), transcribe=lambda: (cues(ENGLISH), "en"), load_embedded=lambda i: [],
+                      fetch=fetch)
+    return Ladder(run, deps), calls
+
+
+def test_retry_searches_again_after_a_failed_search(monkeypatch):
+    # First pass: the sites were down, so FR came from a transcription; the daily quota resets, the user retries.
+    run, ladder, _, _ = make(["fr"], original="en", fetched=FetchResult({}, frozenset({"opensubtitlescom"})))
+    go(run, ladder)
+    assert run.cells["fr"].origin.kind() == "translated"
+    retry, calls = _retry(run, FetchResult({"fr": Acquired("fr", "fr.srt", "gestdown", False, True, 0.1)}), monkeypatch)
+    run.cells["fr"].state = CellState.PENDING
+    asyncio.run(retry.fill("fr"))
+    assert calls == [["fr"]] and run.cells["fr"].origin.kind() == "downloaded"
+    assert not any(a.startswith("download") for a in run.cells["fr"].attempts)  # the old failure is not kept
+
+
+def test_retry_does_not_search_again_for_an_unmatched_download(monkeypatch):
+    unmatched = FetchResult({"fr": Acquired("fr", "fr.srt", "gestdown", False, False)})
+    run, ladder, _, _ = make(["fr"], original="en", fetched=unmatched)
+    go(run, ladder)
+    retry, calls = _retry(run, unmatched, monkeypatch)
+    run.cells["fr"].state = CellState.PENDING
+    asyncio.run(retry.fill("fr"))
+    assert calls == []
+
+
+def test_first_pass_never_searches_twice():
+    run, ladder, _, fetches = make(["fr"], original="en")
+    go(run, ladder)
+    assert fetches == [["en", "fr"]]
