@@ -94,6 +94,11 @@ script at once, never to `SECRETS.MD`. Everything else about secrets is workspac
 
 Only the traps not (yet) in the workspace `windows-host.md` / `code-and-data.md`; the rest moved there.
 
+- **Stopping a server by matching its command line also matches the shell that holds the pattern.** On 2026-11-19 a
+  `Get-CimInstance Win32_Process | Where CommandLine -like '*--port 8011*'` script, written by a heredoc in the same
+  Bash call, killed that Bash call too (exit 255, the rest of the command never ran). Stop a server by its PID
+  (record `$!` or the PID of the process listening on the port: `Get-NetTCPConnection -LocalPort N`), never by a
+  command-line pattern; and lease the port first (`threads.py lease port-<n>`) so the PID can only be yours.
 - **A command that timed out into the background is still running.** Stop it; and a stopped task
   may not stop its script — long loops check a stop file, and you confirm nothing still writes.
 - **An interpreter that is found is not one that runs** — the Windows Store `python3` stub prints an
