@@ -2,12 +2,12 @@
 "use client";
 
 import React, { useState } from 'react';
-import { useStudio } from '@/lib/studio-context';
+import { useStudio } from '@/legacy/lib/studio-context';
 import SubImportModal from './SubImportModal';
 import { 
   Check, Loader2, FileText, ChevronDown, Layers, Play, XCircle
 } from 'lucide-react';
-import { ProcessingStatus, VideoFile } from '@/lib/types';
+import { ProcessingStatus, VideoFile } from '@/legacy/lib/types';
 
 export default function VideoCard({ video }: { video: VideoFile }) {
   const { state, actions } = useStudio();
