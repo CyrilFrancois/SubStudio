@@ -44,7 +44,7 @@ class VideoJob(BaseModel):
     stripExistingSubs: bool = False
 
 class GlobalOptions(BaseModel):
-    transcriptionEngine: str = "medium"
+    transcriptionEngine: str = "turbo"
     generateSRT: bool = True
     muxIntoMkv: bool = True
     cleanUp: bool = False
@@ -59,7 +59,7 @@ class PipelineOrchestrator:
     def __init__(self):
         self.scanner = VideoScanner(base_path="/data")
         self.processor = SubtitleProcessor()
-        self.transcriber = VideoTranscriber(model_size="medium")
+        self.transcriber = VideoTranscriber()
         self.translator = SubtitleTranslator()
         self.muxer = VideoMuxer()
         
@@ -166,7 +166,7 @@ class PipelineOrchestrator:
                 
                 # UPDATED: We pass both the model_size and the context.
                 # The transcriber will check if 'opts.transcriptionEngine' is already loaded.
-                srt_content = await asyncio.to_thread(
+                asr = await asyncio.to_thread(
                     self.transcriber.transcribe,
                     video_path=video.path,
                     file_id=fid,
@@ -174,9 +174,9 @@ class PipelineOrchestrator:
                     current_file=index + 1,
                     total_files=total,
                     model_size=opts.transcriptionEngine,
-                    context_prompt=context,
                     job=job
                 )
+                srt_content = asr.to_srt()
 
             # STEP 3: SYNC
             if video.syncOffset != 0:
