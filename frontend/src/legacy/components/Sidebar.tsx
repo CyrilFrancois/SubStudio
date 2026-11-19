@@ -2,12 +2,12 @@
 "use client";
 
 import React, { useMemo } from 'react';
-import { useStudio } from '@/lib/studio-context';
+import { useStudio } from '@/legacy/lib/studio-context';
 import { 
   Folder, Play, Volume2, Text, Eraser,
-  Check, Loader2, ChevronDown, Cpu, Zap, Settings, Lock, XCircle
+  Check, Loader2, ChevronDown, Zap, Settings, Lock, XCircle
 } from 'lucide-react';
-import { VideoFile } from '@/lib/types';
+import { VideoFile } from '@/legacy/lib/types';
 
 function LanguageDropdown({ label, selected, options, isSingle = false, onToggle, disabled = false }: any) {
   const [isOpen, setIsOpen] = React.useState(false);
@@ -159,23 +159,6 @@ export default function Sidebar() {
             />
           </div>
 
-          <div className="space-y-2">
-            <label className="text-[10px] text-gray-500 font-bold uppercase flex items-center gap-2">
-              <Cpu size={12} /> Whisper Engine
-            </label>
-            <select 
-              disabled={isAnyFileProcessing}
-              value={settings.modelSize}
-              onChange={(e) => actions.setSettings({ modelSize: e.target.value as any })}
-              className="w-full bg-black/40 border border-white/10 p-2.5 rounded-lg text-xs font-mono outline-none focus:border-indigo-500 transition-colors cursor-pointer disabled:cursor-not-allowed"
-            >
-              <option value="tiny">Tiny (Fastest)</option>
-              <option value="base">Base (~1 GB)</option>
-              <option value="small">Small (~2 GB)</option>
-              <option value="medium">Medium (~5 GB)</option>
-              <option value="large">Large-v3 (⚠ ~10 GB)</option>
-            </select>
-          </div>
 
           <div className="space-y-2">
             <label className="text-[10px] text-gray-500 font-bold uppercase flex items-center gap-2">

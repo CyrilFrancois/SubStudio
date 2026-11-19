@@ -17,7 +17,7 @@ from typing import Dict, List, Optional
 import httpx
 import jinja2
 
-from ..subtitles import BatchMismatch, CueText, TranslationContext
+from ..subtitles import BatchMismatch, CueText, TranslationContext, TranslationFailed
 from .llama_server import LlamaServer
 
 logger = logging.getLogger("SubStudio.LocalTranslator")
@@ -55,7 +55,9 @@ class LlamaCppTranslator:
         source = context.source_lang
         if not source:
             # TranslateGemma's prompt names the source language; guessing it per batch fails on a « ♪ »-only batch.
-            raise RuntimeError("source language unknown: the orchestrator sets TranslationContext.source_lang")
+            # No retry can change it, so the language fails now, with the reason the user will read.
+            raise TranslationFailed(f"{target}: the subtitle's own language could not be detected, and the local "
+                                    "model needs it to translate")
         url = self.server.ensure_running()
         # A cue's own line breaks are layout, not meaning: one line per cue keeps the id prefix parseable,
         # and wrap_lines re-wraps the translation afterwards.

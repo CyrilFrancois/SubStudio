@@ -146,6 +146,13 @@ A running FFmpeg child is killed, the partial `_SubStudio.mkv` is removed, and e
 Stops one job (`file_id` URL-encoded once). `404` means it is not running any more. The card's
 **Cancel** button calls it.
 
+### `POST /api/retry`
+
+Re-runs **one language** of a video from its last run (body `{video, language, globalOptions}`), then rebuilds the
+outputs from every language that passed. `404` when that video was not processed since the backend started, `409`
+while it is running. Each video × language has its own verdict (`GET /api/cells/{file_id}`, SSE frames of type
+`cells`): `passed` with its origin, or `failed` with one sentence saying why.
+
 ### `GET /health`
 
 `{"status": "online"}` once the orchestrator has been constructed.

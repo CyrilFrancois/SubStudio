@@ -10,7 +10,7 @@ import httpx
 import pytest
 
 from core.subtitles import BatchMismatch, Cue, TranslationContext, TranslationFailed, translate_cues
-from core.translators import make_translator, source_language
+from core.translators import make_translator
 from core.translators.llama_server import LlamaServer
 from core.translators.llamacpp import LlamaCppTranslator
 
@@ -52,8 +52,8 @@ def translator(reply):
     return t, fake
 
 
-def echo_upper(prompt):
-    return "\n".join(f"{l.split('|', 1)[0]}|{l.split('|', 1)[1].upper()}" for l in lines_of(prompt)), "eos"
+def tag_fr(prompt):
+    return "\n".join(f"{l.split('|', 1)[0]}|[fr] {l.split('|', 1)[1]}" for l in lines_of(prompt)), "eos"
 
 
 CTX = TranslationContext(title="t", source_lang="en")
@@ -61,17 +61,17 @@ CUES = [Cue(id=i, start_ms=i * 1000, end_ms=i * 1000 + 900, text=f"line {i}\nsec
 
 
 def test_prompt_is_the_models_template_with_one_numbered_line_per_cue():
-    t, fake = translator(echo_upper)
+    t, fake = translator(tag_fr)
     t.translate([{"id": 7, "text": "Hello\nthere"}, {"id": 8, "text": "Bye"}], "fr", CTX)
     assert fake.prompts[0].startswith("<bos><start_of_turn>user\nEnglish to French:")
     assert lines_of(fake.prompts[0]) == ["7|Hello there", "8|Bye"]  # a cue's line break never splits its id line
 
 
 def test_full_pipeline_keeps_every_id_and_timing():
-    t, _ = translator(echo_upper)
+    t, _ = translator(tag_fr)
     out = translate_cues(CUES, "fr", CTX, t, retry_delay_s=0)
     assert [(c.id, c.start_ms, c.end_ms) for c in out] == [(c.id, c.start_ms, c.end_ms) for c in CUES]
-    assert out[0].text == "LINE 1 SECOND ROW"
+    assert out[0].text == "[fr] line 1 second row"
 
 
 def test_a_dropped_line_is_a_wrong_answer_and_the_batch_is_split():
@@ -102,15 +102,15 @@ def test_chatter_or_duplicates_are_rejected(reply, why):
 
 
 def test_unknown_source_language_fails_the_language_loudly_not_silently():
-    t, fake = translator(echo_upper)
-    with pytest.raises(TranslationFailed, match="source language unknown"):
+    t, fake = translator(tag_fr)
+    with pytest.raises(TranslationFailed, match="could not be detected"):
         translate_cues(CUES[:2], "fr", TranslationContext(), t, retry_delay_s=0)
     assert fake.prompts == []
 
 
 @pytest.mark.parametrize("source, target", [("en", "xx"), ("xx", "fr")])
 def test_a_language_the_model_does_not_know_raises_before_any_text_is_sent(source, target):
-    t, fake = translator(echo_upper)
+    t, fake = translator(tag_fr)
     with pytest.raises(ValueError, match="unsupported xx"):
         t.translate([{"id": 1, "text": "one"}], target, TranslationContext(source_lang=source))
     assert fake.prompts == []
@@ -161,14 +161,3 @@ def test_backend_choice(monkeypatch):
     monkeypatch.setenv("TRANSLATOR", "openai")
     with pytest.raises(ValueError):
         make_translator()
-
-
-def test_source_language_detected_once_over_the_whole_file():
-    cues = [Cue(id=1, start_ms=0, end_ms=1, text="♪")] + [
-        Cue(id=i, start_ms=0, end_ms=1, text="Je ne sais pas ce que tu veux dire, mais c'est très bien.")
-        for i in range(2, 6)]
-    assert source_language(cues) == "fr"
-    assert source_language([Cue(id=1, start_ms=0, end_ms=1, text="♪ ♪")]) is None
-    # langdetect says « zh-cn »; the model's template only knows « zh »
-    zh = [Cue(id=1, start_ms=0, end_ms=1, text="我不知道你在说什么，但是这很好。我们明天再见吧。")]
-    assert source_language(zh) == "zh"

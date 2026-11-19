@@ -14,11 +14,13 @@ in `SubStudio/CLAUDE.md` or `SubStudio/.claude/rules/*.md`. Map: `doc/harness-mi
 ### The commands that actually exist here
 
 ```bash
-# Frontend — no Node on the host, so run it in a container
-docker run --rm -v "$PWD/frontend:/app" -w /app node:18-alpine ./node_modules/.bin/tsc --noEmit
-docker run --rm -v "$PWD/frontend:/app" -w /app node:18-alpine ./node_modules/.bin/next build
+# Frontend — natively (Node at C:\Users\cyril\tools\node, 2026-11-19), from frontend/
+npx tsc --noEmit
+npx next build            # NEXT_PUBLIC_API_URL is baked in here, not read at run time
+npm run check:types       # fails when src/lib/api.gen.ts no longer matches backend/api (npm run gen:types)
 
-# Backend — syntax at minimum; there is no mypy/pylint/pytest in requirements.txt
+# Backend — from the repo root, in the worktree's venv (pytest.ini sets the paths)
+.venv/Scripts/python.exe -m pytest -q
 python -c "import ast; ast.parse(open('backend/main.py',encoding='utf-8').read())"
 
 # Runtime
@@ -60,8 +62,10 @@ asserting a shape (`/api/scan` returns `{"files": [...]}`, not an array).
 
 **Units.** Name the unit of every number: ms vs s, SRT `,` vs `.` decimal, frames vs seconds.
 
-A translation that cannot be completed raises `TranslationFailed` and fails the video: the source
-text is never shipped as if it were the translation (it was until 2026-11-19, silently). Keep it so.
+A translation that cannot be completed raises `TranslationFailed` and fails **that language's cell**
+(`core/cells.py`, D-0002): the other languages still pass and ship, the video reads « error », and the
+source text is never shipped as if it were the translation (it was until 2026-11-19, silently). Keep it so.
+With `cleanUp`, the source is deleted only when every cell passed: it is what a retry starts from.
 
 ### Boundaries that have actually bitten this project
 
@@ -151,13 +155,19 @@ and lost on restart.
   `Translator` contract (`translate([{id, text}], target, context) -> [{id, text}]`, no timing ever
   sent) and `translate_cues`, which batches, rejects an answer whose id set differs (retry once,
   then split down to one cue), re-attaches timings by id, and raises `TranslationFailed`.
+- `backend/core/cells.py` — one `Cell` per video × language: `pending → running → passed | failed`, an
+  `Origin` (`kept`, `downloaded`, `translated from en`, `transcribed`) or a one-sentence reason. A source already
+  in the wanted language (detected) is kept, never translated. `VideoRun` keeps the source and every cell's cues
+  in memory for `POST /api/retry`. The ladder (`core/acquire`) and the quality gate plug in here.
 - `backend/core/translators/` — `make_translator()` picks the backend from `TRANSLATOR` (`local` default,
-  `gemini` opt-in); `source_language(cues)` detects the source once per file. `llamacpp.py` —
+  `gemini` opt-in). `llamacpp.py` —
   `LlamaCppTranslator`, the default: TranslateGemma 4B Q4_K_M on a native llama.cpp server, 10 cues per
   call as `id|text` lines, prompt rendered from the model's own chat template (`/props`), a reply cut at
   the token limit raises `BatchMismatch`. `llama_server.py` starts the server on the first batch
-  (`--threads 4`, all layers on the iGPU) and `unload()` stops it after each video's translation, so
-  Whisper and the LLM are never loaded together (D-0001). Choice and numbers: `doc/decisions/D-0003`.
+  (`--threads 4`, all layers on the iGPU) and `unload()` (part of the contract) stops it after each video's
+  translations, under a lock shared by batches and retries, so Whisper and the LLM are never loaded together
+  (D-0001). The source language comes from `detect_language` or Whisper; unknown, the cell fails at once.
+  Choice and numbers: `doc/decisions/D-0003`.
 - `backend/core/translator.py` — `GeminiTranslator`, an optional backend of that contract: Gemini
   REST (`httpx`, no SDK), `thinkingLevel: low`, JSON output with a response schema, 30 cues per
   call, temperature 0.2. `get_context_profile()` builds a story bible from the filename.
@@ -170,14 +180,18 @@ and lost on restart.
 
 ### Frontend (Next.js 14, TypeScript)
 
-- `src/app/page.tsx` — owns `StudioState`, SSE subscriptions, batch dispatch.
-- `src/lib/studio-context.tsx` — `StudioContext` + `useStudio`. **This must not live in
-  `page.tsx`**: the App Router rejects non-standard exports from a page module and `next build`
-  fails with "StudioContext is not a valid Page export field".
-- `src/lib/types.ts` — single source of truth; must mirror the backend's actual JSON.
-- `src/lib/api.ts` — REST client. `src/lib/sse.ts` — EventSource wrapper.
-- `src/components/dashboard/` — `VideoList`, `VideoCard`, `GlobalProgress`, `SubImportModal`.
-- `src/components/layout/Sidebar.tsx` — global settings and batch launch.
+Screens of D-0002 / ux-review §2, built on the UI API (`backend/api`, below):
+- `src/app/page.tsx` — Library: coverage matrix (video × wanted language), search, filters, select,
+  Start. `src/components/library/` — `LibraryTable`, `CoverageChip` (icon + text, never colour
+  alone), `VideoDetails` (subtitles found and why not counted, per-video overrides).
+- `src/app/settings/page.tsx` — the one language list (OV + ISO 639-1), `count_existing`; saved on change.
+- `src/components/shell/AppShell.tsx` — navigation, stub-mode banner, backend status.
+- `src/lib/api.gen.ts` — **generated** from the backend's OpenAPI (`npm run gen:types`); `types.ts`
+  only aliases it. Never hand-write a backend shape. `src/lib/api.ts` — REST client (every failure
+  throws the backend's sentence). `src/lib/events.ts` — the one `GET /api/events` stream.
+- `src/app/legacy/page.tsx` + `src/legacy/` — the previous dashboard on `/api/process`, kept whole
+  until the queue screen and the job store exist; delete both together then. A page module exports
+  only the page: the App Router fails `next build` on any other export (hence `legacy/lib/studio-context.tsx`).
 
 ### API contracts
 
@@ -186,10 +200,22 @@ and lost on restart.
 | `GET /api/scan?target_path=/data` | `{"files": [...]}`. Cached 2 s — **globally, not per path** (known bug, see the workspace `TODOLIST.MD`). |
 | `POST /api/process` | `{"status":"accepted","count":N}`, returns immediately. |
 | `GET /api/events/{file_id:path}` | SSE. `file_id` = full path, encoded **once**. |
+| `POST /api/retry` | `{video, language, globalOptions}`: re-runs one cell from the source kept in memory, rebuilds the output. `404` before a first run, `409` while the video runs. |
+| `GET /api/cells/{file_id:path}` | `{"fileId", "cells": [{language, state, origin, rung, reason}]}` of the last run. |
 | `GET /health` | `{"status":"online"}`. |
 
+UI API (`backend/api`, models in `backend/api/schemas.py` = the contract; agreed with workspace-64, 2026-11-19).
+Videos are addressed by `LibraryVideo.id` (hash of the path), never by the path in a URL.
+
+| Route | Notes |
+|---|---|
+| `GET /api/library` | Every video under `SUBSTUDIO_MEDIA_ROOT` × every wanted language: `passed` (with origin) / `missing` / `pending` / `running` / `failed` / `unknown` (ffprobe failed). ffprobe cached by path+mtime+size. What counts as ours: `core/provenance.py`, the one rule. |
+| `GET/PUT /api/settings` | `{languages, count_existing}`, JSON under `SUBSTUDIO_STATE_DIR`, written atomically. |
+| `POST/GET /api/jobs`, `DELETE /api/jobs/{id}`, `GET /api/events`, `GET/PUT /api/subtitles/{id}/{lang}` | Stub only with `SUBSTUDIO_API_STUB=1`; otherwise 501 with the sentence the UI shows, until the job store implements the same models. `/api/events` is one SSE stream, frames discriminated by `kind` (`job`, `log` with the backend's `ts`, `library`). |
+| `GET /api/system` | `stub`, media root, CPU/RAM against the D-0001 budget. |
+
 **SSE frames are unnamed** — everything arrives on the default `message` event with a `type`
-discriminator of `"status"` or `"log"`. There is no `event:` line, so `addEventListener("transcribing", …)`
+discriminator of `"status"`, `"log"` or `"cells"` (`CellVerdict[]` in `sse.ts`). There is no `event:` line, so `addEventListener("transcribing", …)`
 can never fire. Progress runs 5 → 100.
 
 **`workflowMode`** is one of `whisper` (always transcribe), `hybrid` (sidecar SRT if found, else
@@ -204,7 +230,10 @@ boolean, not a mode.
 `LLAMA_MODEL_PATH`, `LLAMA_GPU_LAYERS`, `LLAMA_PORT` (defaults under `%LOCALAPPDATA%\SubStudio\`);
 only with `TRANSLATOR=gemini`: `GEMINI_API_KEY`, optional `GEMINI_MODEL`
 (default `gemini-3.8-flash`; must be a 3.x model because the request sends `thinkingLevel`),
-`NEXT_PUBLIC_MEDIA_PATH`, `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_LANGUAGES`, `WHISPER_MODEL`.
+`NEXT_PUBLIC_MEDIA_PATH`, `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_LANGUAGES` (legacy dashboard only),
+`WHISPER_MODEL`. UI API: `SUBSTUDIO_MEDIA_ROOT` (default `/data`), `SUBSTUDIO_STATE_DIR` (default
+`backend/state`, gitignored; never inside the library), `SUBSTUDIO_API_STUB=1` (simulated jobs,
+the UI shows a banner).
 Whisper models cache in the `whisper_model_cache` volume. Key at
 https://aistudio.google.com/apikey.
 

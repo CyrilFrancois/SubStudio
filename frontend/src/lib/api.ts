@@ -1,54 +1,46 @@
-// api.ts — Backend REST client. Exports: api, scanFolder, startJob, abortAll, cancelJob.
+// api.ts — REST client for the UI contract (backend/api). Every failure throws ApiError with the backend's sentence. Exports: API_BASE_URL, ApiError, api.
+import type {
+  Job, JobCreate, JobCreateResponse, JobList, LibraryResponse, Settings, SettingsResponse, SystemStatus,
+} from './types';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+// `||` and not `??`: a defined-but-empty NEXT_PUBLIC_API_URL must fall back too.
+export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-export const api = {
-  /** GET /api/scan — recursive directory walk with subtitle detection. */
-  async scanFolder(path: string = "/data") {
-    const params = new URLSearchParams({ target_path: path });
-
-    const response = await fetch(`${API_BASE_URL}/api/scan?${params}`, {
-      method: 'GET',
-      headers: { 'Content-Type': 'application/json' },
-    });
-
-    return handleResponse(response, 'Failed to scan media library');
-  },
-
-  /** POST /api/process — queues a batch and returns immediately. */
-  async startJob(payload: unknown) {
-    const response = await fetch(`${API_BASE_URL}/api/process`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-
-    return handleResponse(response, 'Failed to start the processing job');
-  },
-
-  /** POST /api/abort — signals every in-flight AND queued job to stop. */
-  async abortAll() {
-    const response = await fetch(`${API_BASE_URL}/api/abort`, { method: 'POST' });
-    return handleResponse(response, 'Failed to abort the batch');
-  },
-
-  /** DELETE /api/abort/{file_id} — stops one job. 404 means it already finished. */
-  async cancelJob(fileId: string) {
-    const response = await fetch(
-      `${API_BASE_URL}/api/abort/${encodeURIComponent(fileId)}`,
-      { method: 'DELETE' }
-    );
-    if (response.status === 404) return { status: 'not_running', file: fileId };
-    return handleResponse(response, 'Failed to cancel that job');
+export class ApiError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
   }
-};
-
-async function handleResponse(response: Response, defaultError: string) {
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.detail || defaultError);
-  }
-  return response.json();
 }
 
-export const { scanFolder, startJob, abortAll, cancelJob } = api;
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE_URL}${path}`, {
+      method,
+      headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch {
+    // fetch only rejects when no HTTP answer came back at all.
+    throw new ApiError(0, `The backend does not answer at ${API_BASE_URL}. Is it running?`);
+  }
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    const detail = data?.detail;
+    const message = typeof detail === 'string'
+      ? detail
+      : Array.isArray(detail) ? detail.map((d: { msg?: string }) => d.msg).filter(Boolean).join('; ') : '';
+    throw new ApiError(res.status, message || `${method} ${path} failed with HTTP ${res.status}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+export const api = {
+  library: () => request<LibraryResponse>('GET', '/api/library'),
+  createJobs: (req: JobCreate) => request<JobCreateResponse>('POST', '/api/jobs', req),
+  jobs: () => request<JobList>('GET', '/api/jobs'),
+  cancelJob: (id: string) => request<Job>('DELETE', `/api/jobs/${encodeURIComponent(id)}`),
+  settings: () => request<SettingsResponse>('GET', '/api/settings'),
+  saveSettings: (s: Settings) => request<SettingsResponse>('PUT', '/api/settings', s),
+  system: () => request<SystemStatus>('GET', '/api/system'),
+};

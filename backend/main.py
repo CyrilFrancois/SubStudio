@@ -15,12 +15,15 @@ from typing import Dict, List, Optional, Any, Set
 # Core Imports
 from core.scanner import VideoScanner
 from core.transcriber import VideoTranscriber
-from core.translators import make_translator, source_language
-from core.subtitles import TranslationContext, load_file, parse, shift, to_srt, translate_cues, wrap_lines
+from core.translators import make_translator
+from core.subtitles import TranslationContext, detect_language, load_file, parse, shift, to_srt, wrap_lines
+from core.cells import Cell, CellState, Source, VideoRun, produce_cell
+from core.acquire.types import Rung
 from core.muxer import VideoMuxer
 from core.provenance import substudio_track_title
 from core.events import event_manager, setup_logging_bridge
 from core.jobs import job_registry, JobAborted
+from api import router as api_router
 
 # /data inside Docker; set SUBSTUDIO_MEDIA_ROOT (e.g. C:/Videos) when the backend runs natively.
 MEDIA_ROOT = os.getenv("SUBSTUDIO_MEDIA_ROOT", "/data")
@@ -48,7 +51,7 @@ class VideoJob(BaseModel):
     stripExistingSubs: bool = False
 
 class GlobalOptions(BaseModel):
-    transcriptionEngine: str = "medium"
+    transcriptionEngine: str = "turbo"
     generateSRT: bool = True
     muxIntoMkv: bool = True
     cleanUp: bool = False
@@ -62,14 +65,16 @@ class ProcessRequest(BaseModel):
 class PipelineOrchestrator:
     def __init__(self):
         self.scanner = VideoScanner(base_path=MEDIA_ROOT)
-        self.transcriber = VideoTranscriber(model_size="medium")
+        self.transcriber = VideoTranscriber()
         self.translator = make_translator()
-        # Two POST /api/process can run batches at once; they share one model server. Without this lock one
-        # video's unload() kills the server under the other's request, and its retry reloads it (D-0001).
+        # A batch and a retry can run at once; they share one model server. Without this lock one video's
+        # unload() kills the server under the other's request, and its retry reloads it (D-0001).
         self._translate_lock = asyncio.Lock()
         self.muxer = VideoMuxer()
         
         self.active_jobs: Set[str] = set()
+        # The last run of each video, so one failed language can be retried without redoing its source.
+        self.runs: Dict[str, VideoRun] = {}
         # Cache keyed BY PATH: a single timestamp meant two scans of different folders
         # within the debounce window both returned the first folder's contents.
         self._scan_cache: Dict[str, tuple] = {}
@@ -106,6 +111,101 @@ class PipelineOrchestrator:
             logger.info("🏁 BATCH PROCESSING FINISHED")
             event_manager.emit("system_events", "batch_done", 100, "All tasks completed")
 
+    @asynccontextmanager
+    async def _translation(self):
+        """One video's translations at a time; the model is freed afterwards, success or not, so it never shares
+        RAM with the next transcription (D-0001)."""
+        async with self._translate_lock:
+            try:
+                yield
+            finally:
+                await asyncio.to_thread(self.translator.unload)
+
+    async def _run_cell(self, run: VideoRun, lang_code: str, job, p: str):
+        job.raise_if_aborted()
+        cell = run.cells[lang_code]
+        event_manager.emit(run.path, "translating", 50, f"{p} Step 4/5: {lang_code.upper()}...")
+
+        def on_batch(done: int, total_cues: int):
+            event_manager.emit(run.path, "translating", 40 + int(done / total_cues * 40),
+                               f"{p} Step 4/5: Translating {lang_code.upper()} ({done}/{total_cues} lines)")
+
+        cell.state = CellState.RUNNING
+        event_manager.emit_cells(run.path, run.to_json())
+        try:
+            await asyncio.to_thread(produce_cell, cell, run.source, self.translator,
+                                    on_batch=on_batch, check_abort=job.raise_if_aborted)
+        except BaseException as e:
+            # A cell never stays « running »: an abort or a crash ends it failed, with its reason, then propagates.
+            cell.state = CellState.FAILED
+            cell.reason = "cancelled by the user" if isinstance(e, JobAborted) else f"unexpected error: {e}"
+            cell.cues = None
+            event_manager.emit_cells(run.path, run.to_json())
+            raise
+        if cell.state == CellState.PASSED:
+            cell.cues = wrap_lines(cell.cues, 50)
+            logger.info(f"✅ {p} {cell.summary()}")
+        else:
+            logger.error(f"❌ {p} {cell.summary()}")
+        event_manager.emit_cells(run.path, run.to_json())
+
+    async def _write_outputs(self, run: VideoRun, video: "VideoJob", opts: "GlobalOptions", job, p: str,
+                             index: int, total: int):
+        passed = run.passed()
+        if not passed:
+            return
+        if opts.generateSRT:
+            for lang_code, cues in passed.items():
+                with open(Path(run.path).with_suffix(f".{lang_code}.srt"), "w", encoding="utf-8") as f:
+                    f.write(to_srt(cues))
+        if opts.muxIntoMkv:
+            job.raise_if_aborted()
+            event_manager.emit(run.path, "processing", 90, f"{p} Muxing into MKV...")
+            await asyncio.to_thread(
+                self.muxer.mux,
+                video_path=run.path,
+                srts=passed,
+                current_file=index + 1,
+                total_files=total,
+                strip_existing=video.stripExistingSubs,
+                # Never delete the source while a language failed: it is what a retry starts from.
+                cleanup_original=opts.cleanUp and run.all_passed(),
+                job=job
+            )
+
+    def _emit_outcome(self, run: VideoRun, p: str, name: str):
+        summary = run.summary()
+        if run.all_passed():
+            event_manager.emit(run.path, "done", 100, f"Processing Complete: {summary}")
+            logger.info(f"✅ {p} COMPLETED: {name} ({summary})")
+        else:
+            # Partly done is not done: the passed languages are in the output, the video still reads as failed.
+            event_manager.emit(run.path, "error", 0, summary)
+            logger.error(f"❌ {p} NOT COMPLETE: {name} ({summary})")
+
+    async def retry_cell(self, video: "VideoJob", lang_code: str, opts: "GlobalOptions"):
+        """Re-runs one language of a video from its kept source, then rebuilds the output from every passed cell."""
+        fid = video.path
+        run = self.runs[fid]
+        self.active_jobs.add(fid)
+        job = job_registry.register(fid)
+        log_handler = setup_logging_bridge(fid)
+        p = "[retry]"
+        try:
+            async with self._translation():
+                await self._run_cell(run, lang_code, job, p)
+            await self._write_outputs(run, video, opts, job, p, 0, 1)
+            self._emit_outcome(run, p, video.name)
+        except JobAborted:
+            event_manager.emit(fid, "cancelled", 0, "Cancelled")
+        except Exception as e:
+            logger.error(f"❌ {p} ERROR: {e}")
+            event_manager.emit(fid, "error", 0, str(e))
+        finally:
+            self.active_jobs.discard(fid)
+            job_registry.release(fid)
+            logging.getLogger().removeHandler(log_handler)
+
     async def execute_pipeline(self, video: VideoJob, opts: GlobalOptions, index: int, total: int):
         fid = video.path
         self.active_jobs.add(fid)
@@ -131,6 +231,7 @@ class PipelineOrchestrator:
             # STEP 2: SOURCE (Transcription or SRT Import) — from here on, a list of cues, never SRT text
             cues = None
             is_whisper = True
+            spoken_lang = None
 
             if video.workflowMode in ["srt", "hybrid"]:
                 potential_paths = []
@@ -148,7 +249,7 @@ class PipelineOrchestrator:
 
             if cues is None:
                 event_manager.emit(fid, "processing", 15, f"{p} Transcribing with Whisper...")
-                srt_text = await asyncio.to_thread(
+                asr = await asyncio.to_thread(
                     self.transcriber.transcribe,
                     video_path=video.path,
                     file_id=fid,
@@ -156,72 +257,36 @@ class PipelineOrchestrator:
                     current_file=index + 1,
                     total_files=total,
                     model_size=opts.transcriptionEngine,
-                    context_prompt=context,
                     job=job
                 )
-                cues = parse(srt_text, "srt")
-                if not cues:
-                    raise RuntimeError("Transcription produced no subtitle (no speech detected?)")
+                # The transcriber raises a named error on no speech, so an empty list cannot reach here.
+                cues = asr.to_cues()
+                # Whisper hears the language; text detection only guesses it. Trusted when Whisper is sure.
+                if asr.language_probability >= 0.9:
+                    spoken_lang = asr.language
 
             # STEP 3: SYNC
             if video.syncOffset != 0:
                 logger.info(f"⏱️ Adjusting timing by {video.syncOffset}s")
                 cues = shift(cues, video.syncOffset)
 
-            # STEP 4: TRANSLATION — a language that cannot be fully translated fails the video (TranslationFailed)
-            source_lang = await asyncio.to_thread(source_language, cues)  # langdetect is CPU work: off the loop
-            translation_ctx = TranslationContext(title=video.name, notes=context, source_is_asr=is_whisper,
-                                                 source_lang=source_lang)
-            translated_map = {}
-            await self._translate_lock.acquire()
-            try:
+            # STEP 4: ONE CELL PER LANGUAGE (D-0002) — each passes or fails alone, with its origin or its reason.
+            source_lang = spoken_lang or await asyncio.to_thread(detect_language, cues)  # CPU work: off the loop
+            source = Source(
+                cues=cues, rung=Rung.ASR if is_whisper else Rung.TRANSLATE, language=source_lang,
+                context=TranslationContext(title=video.name, notes=context, source_is_asr=is_whisper,
+                                           source_lang=source_lang),
+            )
+            run = VideoRun(path=fid, source=source, cells={lang: Cell(lang) for lang in video.out})
+            self.runs[fid] = run
+            event_manager.emit_cells(fid, run.to_json())
+            async with self._translation():
                 for lang_code in video.out:
-                    job.raise_if_aborted()
-                    event_manager.emit(fid, "processing", 50, f"{p} Translating to {lang_code}...")
-                    logger.info(f"Translating {len(cues)} cues from {translation_ctx.source_lang or '?'} into "
-                                f"{lang_code.upper()} with {self.translator.name}...")
+                    await self._run_cell(run, lang_code, job, p)
 
-                    def on_batch(done: int, total_cues: int, lang=lang_code):
-                        event_manager.emit(fid, "translating", 40 + int(done / total_cues * 40),
-                                           f"{p} Step 4/5: Translating {lang.upper()} ({done}/{total_cues} lines)")
-
-                    translated = await asyncio.to_thread(
-                        translate_cues, cues, lang_code, translation_ctx, self.translator,
-                        on_batch=on_batch, check_abort=job.raise_if_aborted,
-                    )
-                    translated = wrap_lines(translated, 50)
-                    translated_map[lang_code] = translated
-            finally:
-                # One heavy model at a time (D-0001): free the translation model before the next transcription.
-                try:
-                    await asyncio.to_thread(self.translator.unload)
-                finally:
-                    self._translate_lock.release()
-
-            # Written only once EVERY language succeeded: a video that ends in error leaves no partial output.
-            if opts.generateSRT:
-                for lang_code, translated in translated_map.items():
-                    out_srt = Path(video.path).with_suffix(f".{lang_code}.srt")
-                    with open(out_srt, "w", encoding="utf-8") as f:
-                        f.write(to_srt(translated))
-
-            # STEP 5: MUXING
-            if opts.muxIntoMkv:
-                job.raise_if_aborted()
-                event_manager.emit(fid, "processing", 90, f"{p} Muxing into MKV...")
-                await asyncio.to_thread(
-                    self.muxer.mux,
-                    video_path=video.path,
-                    srts=translated_map,
-                    current_file=index + 1,
-                    total_files=total,
-                    strip_existing=video.stripExistingSubs,
-                    cleanup_original=opts.cleanUp,
-                    job=job
-                )
-
-            event_manager.emit(fid, "done", 100, "Processing Complete")
-            logger.info(f"✅ {p} COMPLETED: {video.name}")
+            # STEP 5: OUTPUT — only the cells that passed
+            await self._write_outputs(run, video, opts, job, p, index, total)
+            self._emit_outcome(run, p, video.name)
 
         except JobAborted:
             logger.warning(f"🛑 {p} CANCELLED: {video.name}")
@@ -253,6 +318,8 @@ async def lifespan(app: FastAPI):
 # --- API ---
 app = FastAPI(title="SubStudio Pro", lifespan=lifespan)
 
+app.include_router(api_router)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -275,6 +342,37 @@ async def process(request: ProcessRequest):
     task.add_done_callback(_jobs.discard)
     task.add_done_callback(_log_job_result)
     return {"status": "accepted", "count": len(request.videos)}
+
+class RetryRequest(BaseModel):
+    video: VideoJob
+    language: str
+    globalOptions: GlobalOptions
+
+@app.post("/api/retry")
+async def retry(request: RetryRequest):
+    """Retry one video × language (D-0002): needs that video's last run in this backend's memory."""
+    fid = request.video.path
+    run = orchestrator.runs.get(fid)
+    if run is None or request.language not in run.cells:
+        raise HTTPException(status_code=404, detail="No earlier run of this video and language: process it first")
+    # One job at a time on this PC (D-0001: one heavy model), and a queued video counts as busy too.
+    if orchestrator.active_jobs or job_registry.active_ids():
+        raise HTTPException(status_code=409, detail="Another job is running: retry once it has finished")
+    if not Path(fid).is_file():
+        raise HTTPException(status_code=409, detail="The source video is no longer there (removed by cleanUp?)")
+    orchestrator.active_jobs.add(fid)  # claimed before returning: a second retry in the same instant gets 409
+    task = asyncio.create_task(orchestrator.retry_cell(request.video, request.language, request.globalOptions))
+    _jobs.add(task)
+    task.add_done_callback(_jobs.discard)
+    task.add_done_callback(_log_job_result)
+    return {"status": "accepted", "file": fid, "language": request.language}
+
+@app.get("/api/cells/{file_id:path}")
+async def cells(file_id: str):
+    run = orchestrator.runs.get(file_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="No run of this video yet")
+    return {"fileId": file_id, "cells": run.to_json()}
 
 @app.get("/api/events/{file_id:path}")
 async def events(file_id: str):

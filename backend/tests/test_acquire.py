@@ -9,7 +9,7 @@ from unittest import mock
 import pysubs2
 from subliminal.video import Episode, Movie
 
-from core.acquire import ExistingSub, Rung, normalize_language, plan
+from core.acquire import ExistingSub, Rung, Step, normalize_language, plan
 from core.acquire.align import align
 from core.acquire.download import min_score, providers
 
@@ -55,30 +55,30 @@ class Plan(unittest.TestCase):
         self.assertEqual(_rungs(plans[0]), [Rung.DOWNLOAD])  # never translated or transcribed for itself
         self.assertEqual(plans[1].steps[1].from_languages, ("ja",))
 
-    def test_unmarked_subtitles_are_not_considered_by_default(self):
-        # The C:\Videos case: an older SubStudio's bad tracks and sidecars look like a release's own.
-        old = [ExistingSub("fr", "embedded", "2"), ExistingSub("de", "embedded", "3"),
-               ExistingSub("fr", "sidecar", "/x.fr.srt")]
-        plans = plan(["fr"], old, original_language="en")
-        self.assertEqual([p.language for p in plans], ["en", "fr"])  # no German source-only plan
-        self.assertEqual(_rungs(plans[1]), [Rung.DOWNLOAD, Rung.TRANSLATE, Rung.ASR])
-        for kind in ("embedded", "sidecar"):
-            (p,) = plan(["fr"], [ExistingSub("fr", kind, "2", marked=True)])
-            self.assertEqual(p.rung, Rung.EXISTING, kind)
+    def test_unmarked_existing_subtitles_are_checked_not_ignored(self):
+        # The C:\Videos case (Cyril, 2026-11-19): « English (SDH) » tracks of unknown origin are evaluated at rung 1;
+        # the gate, not the planner, keeps a bad one out — so the rest of the ladder stays behind it.
+        sdh = ExistingSub("en", "embedded", "2")
+        en, fr = plan(["OV", "en", "fr"], [sdh], original_language="eng")
+        self.assertEqual(en.steps[0], Step(Rung.EXISTING, "en", source=sdh))
+        self.assertEqual(_rungs(en), [Rung.EXISTING, Rung.DOWNLOAD, Rung.TRANSLATE, Rung.ASR])
+        self.assertEqual(fr.steps[1].from_languages, ("en",))  # a passed SDH track can feed French
+
+    def test_ours_first_then_text_before_bitmap_and_untagged_left_out(self):
+        subs = [ExistingSub("fr", "embedded", "3", text=False), ExistingSub("fr", "embedded", "2"),
+                ExistingSub("fr", "sidecar", "/x.fr.srt"), ExistingSub("fr", "embedded", "5", marked=True),
+                ExistingSub(None, "embedded", "6")]
+        (p,) = plan(["fr"], subs)
+        self.assertEqual([s.source.ref for s in p.steps if s.rung == Rung.EXISTING], ["5", "/x.fr.srt", "2", "3"])
 
     def test_existing_is_evaluated_then_falls_through(self):
         # Rung 1 ends at the gate: a subtitle that fails it must leave the rest of the ladder in place.
-        (p,) = plan(["fr"], [ExistingSub("fr", "embedded", "2")], count_existing=True)
+        (p,) = plan(["fr"], [ExistingSub("fr", "embedded", "2")])
         self.assertEqual(_rungs(p), [Rung.EXISTING, Rung.DOWNLOAD, Rung.ASR])
-
-    def test_text_existing_before_bitmap(self):
-        (p,) = plan(["fr"], [ExistingSub("fr", "embedded", "3", text=False), ExistingSub("fr", "sidecar", "/x.fr.srt")],
-                    count_existing=True)
-        self.assertEqual([s.source.kind for s in p.steps[:2]], ["sidecar", "embedded"])
 
     def test_other_language_text_track_becomes_a_source_only_plan(self):
         plans = plan(["fr"], [ExistingSub("de", "embedded", "2"), ExistingSub("it", "embedded", "4", text=False)],
-                     original_language="ja", count_existing=True)
+                     original_language="ja")
         self.assertEqual([(p.language, p.source_only) for p in plans], [("ja", True), ("fr", False), ("de", True)])
         self.assertEqual(plans[1].steps[1].from_languages, ("ja", "de"))  # OV first; bitmap Italian never a source
         self.assertEqual(_rungs(plans[2]), [Rung.EXISTING])

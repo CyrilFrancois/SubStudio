@@ -105,3 +105,40 @@ def test_progress_reaches_the_total():
 def test_nothing_to_translate_is_an_error():
     with pytest.raises(TranslationFailed):
         translate_cues([], "fr", CTX, Fake())
+
+
+SENTENCES = [Cue(id=i, start_ms=i * 1000, end_ms=i * 1000 + 800, text=f"this is sentence number {i}") for i in range(1, 9)]
+
+
+MANY = [Cue(id=i, start_ms=i * 1000, end_ms=i * 1000 + 800, text=f"this is sentence number {i}") for i in range(1, 13)]
+
+
+def test_a_model_that_sends_the_source_back_fails_the_language():
+    fake = Fake(behave=lambda cues: [{"id": c["id"], "text": c["text"]} for c in cues])
+    with pytest.raises(TranslationFailed, match="fr: .*came back in the source language"):
+        translate_cues(MANY, "fr", CTX, fake, retry_delay_s=0)
+
+
+def test_a_short_track_left_unchanged_is_not_called_an_echo():
+    # Under 10 sentences an unknown-language clip asked in its own language must not fail (review finding 4).
+    out = translate_cues(SENTENCES, "en", CTX, Fake(behave=lambda cues: cues), retry_delay_s=0)
+    assert [c.text for c in out] == [c.text for c in SENTENCES]
+
+
+def test_an_echoed_batch_is_retried_and_a_few_unchanged_lines_are_accepted():
+    state = {"n": 0}
+    def first_call_echoes(cues):
+        state["n"] += 1
+        if state["n"] == 1:
+            return [{"id": c["id"], "text": c["text"]} for c in cues]
+        return [{"id": c["id"], "text": "ceci est la phrase"} for c in cues]
+    out = translate_cues(SENTENCES, "fr", CTX, Fake(batch_size=8, behave=first_call_echoes), retry_delay_s=0)
+    assert state["n"] == 2 and {c.text for c in out} == {"ceci est la phrase"}
+    names = [Cue(id=1, start_ms=0, end_ms=500, text="John!"), Cue(id=2, start_ms=600, end_ms=900, text="OK")]
+    assert [c.text for c in translate_cues(names, "fr", CTX, Fake(behave=lambda cues: cues))] == ["John!", "OK"]
+
+
+def test_translating_into_the_source_language_is_not_an_echo():
+    same = TranslationContext(source_lang="en")
+    out = translate_cues(SENTENCES, "en", same, Fake(behave=lambda cues: cues), retry_delay_s=0)
+    assert [c.text for c in out] == [c.text for c in SENTENCES]
