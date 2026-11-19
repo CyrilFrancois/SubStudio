@@ -4,7 +4,8 @@
 The case it was written for: Ghosts S05E12 FR (2026-11-19). Before fix/translator-replies the backend log of that
 run shows 65 rejected replies and 31 split batches, then the language failed on cue 272. This runs the same source
 file through the current code and counts the same warnings, so the two numbers compare like for like.
-Needs the model: take `threads.py lease heavy` first (one heavy model at a time, D-0001).
+Loads the model: run it only as `python3 -I <workspace>/doc/_tools/threads.py with heavy --min-free-mb 4096 -- …`
+(one heavy model at a time, D-0001; doc/04).
 """
 import json
 import logging

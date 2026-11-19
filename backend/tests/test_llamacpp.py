@@ -127,6 +127,8 @@ def test_chatter_or_duplicates_are_rejected(reply, why):
     ("12\xa0: Bonjour.\n13\u202f| Salut.", {12: "Bonjour.", 13: "Salut."}),
     ("40|On l'a caché\ndans le bunker.\n41|Oui.", {40: "On l'a caché dans le bunker.", 41: "Oui."}),
     ("7|Bon,\n\xa0à propos de cela, j'ai écrit.\n8|Ok.", {7: "Bon, à propos de cela, j'ai écrit.", 8: "Ok."}),
+    ("29|Je suis Hetty,\n30– et j'ai construit cette maison.", {29: "Je suis Hetty,", 30: "et j'ai construit cette maison."}),
+    ("11|Oui.\n12 - Non.", {11: "Oui.", 12: "- Non."}),         # a hyphen after the id is a dialogue dash
 ])
 def test_reply_shapes_seen_live_are_read_by_id(reply, expected):
     t, _ = translator(lambda p: (reply, "eos"))
