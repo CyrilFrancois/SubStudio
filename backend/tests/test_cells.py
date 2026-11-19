@@ -132,3 +132,40 @@ def test_retry_and_cells_routes_refuse_a_video_never_processed():
         body = {"video": {"name": "x.mkv", "path": "/data/never.mkv"}, "language": "fr", "globalOptions": {}}
         assert client.post("/api/retry", json=body).status_code == 404
         assert client.get("/api/cells//data/never.mkv").status_code == 404
+
+
+def test_retry_is_refused_while_another_job_runs_or_when_the_source_is_gone(clip):
+    from fastapi.testclient import TestClient
+    with TestClient(main.app) as client:
+        orch = main.orchestrator
+        orch.translator = Tag(broken={"fr"})
+        orch.translator.get_context_profile = lambda name: ""
+        process(orch, clip, ("de", "fr"))
+        body = {"video": {"name": clip.name, "path": str(clip)}, "language": "fr", "globalOptions": {}}
+        orch.active_jobs.add("another video")
+        assert client.post("/api/retry", json=body).status_code == 409
+        orch.active_jobs.discard("another video")
+        moved = clip.with_suffix(".moved")
+        clip.rename(moved)
+        assert client.post("/api/retry", json=body).status_code == 409
+        moved.rename(clip)
+        assert client.get(f"/api/cells/{clip}").json()["cells"][1]["state"] == "failed"
+
+
+def test_an_abort_mid_cell_ends_it_failed_not_running():
+    from core.jobs import JobAborted, JobHandle
+    cues = [Cue(id=i + 1, start_ms=i * 1000, end_ms=i * 1000 + 900, text=t) for i, t in enumerate(ENGLISH)]
+    run = main.VideoRun(path="v", source=Source(cues=cues, rung=Rung.TRANSLATE, language="en",
+                                                context=TranslationContext()), cells={"de": Cell("de")})
+    handle = JobHandle("v")
+
+    class AbortsDuringFirstCall(Tag):
+        batch_size = 1
+        def translate(self, cues, target, context):
+            handle.abort()
+            return super().translate(cues, target, context)
+
+    orch = orchestrator(AbortsDuringFirstCall())
+    with pytest.raises(JobAborted):
+        asyncio.run(orch._run_cell(run, "de", handle, "[t]"))
+    assert (run.cells["de"].state, run.cells["de"].reason) == (CellState.FAILED, "cancelled by the user")

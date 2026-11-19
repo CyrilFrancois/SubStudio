@@ -110,10 +110,19 @@ def test_nothing_to_translate_is_an_error():
 SENTENCES = [Cue(id=i, start_ms=i * 1000, end_ms=i * 1000 + 800, text=f"this is sentence number {i}") for i in range(1, 9)]
 
 
+MANY = [Cue(id=i, start_ms=i * 1000, end_ms=i * 1000 + 800, text=f"this is sentence number {i}") for i in range(1, 13)]
+
+
 def test_a_model_that_sends_the_source_back_fails_the_language():
     fake = Fake(behave=lambda cues: [{"id": c["id"], "text": c["text"]} for c in cues])
-    with pytest.raises(TranslationFailed, match="fr: .*cannot translate|came back in the source language"):
-        translate_cues(SENTENCES, "fr", CTX, fake, retry_delay_s=0)
+    with pytest.raises(TranslationFailed, match="fr: .*came back in the source language"):
+        translate_cues(MANY, "fr", CTX, fake, retry_delay_s=0)
+
+
+def test_a_short_track_left_unchanged_is_not_called_an_echo():
+    # Under 10 sentences an unknown-language clip asked in its own language must not fail (review finding 4).
+    out = translate_cues(SENTENCES, "en", CTX, Fake(behave=lambda cues: cues), retry_delay_s=0)
+    assert [c.text for c in out] == [c.text for c in SENTENCES]
 
 
 def test_an_echoed_batch_is_retried_and_a_few_unchanged_lines_are_accepted():

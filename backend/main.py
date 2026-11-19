@@ -118,8 +118,16 @@ class PipelineOrchestrator:
 
         cell.state = CellState.RUNNING
         event_manager.emit_cells(run.path, run.to_json())
-        await asyncio.to_thread(produce_cell, cell, run.source, self.translator,
-                                on_batch=on_batch, check_abort=job.raise_if_aborted)
+        try:
+            await asyncio.to_thread(produce_cell, cell, run.source, self.translator,
+                                    on_batch=on_batch, check_abort=job.raise_if_aborted)
+        except BaseException as e:
+            # A cell never stays « running »: an abort or a crash ends it failed, with its reason, then propagates.
+            cell.state = CellState.FAILED
+            cell.reason = "cancelled by the user" if isinstance(e, JobAborted) else f"unexpected error: {e}"
+            cell.cues = None
+            event_manager.emit_cells(run.path, run.to_json())
+            raise
         if cell.state == CellState.PASSED:
             cell.cues = wrap_lines(cell.cues, 50)
             logger.info(f"✅ {p} {cell.summary()}")
@@ -327,8 +335,12 @@ async def retry(request: RetryRequest):
     run = orchestrator.runs.get(fid)
     if run is None or request.language not in run.cells:
         raise HTTPException(status_code=404, detail="No earlier run of this video and language: process it first")
-    if fid in orchestrator.active_jobs:
-        raise HTTPException(status_code=409, detail="This video is being processed")
+    # One job at a time on this PC (D-0001: one heavy model), and a queued video counts as busy too.
+    if orchestrator.active_jobs or job_registry.active_ids():
+        raise HTTPException(status_code=409, detail="Another job is running: retry once it has finished")
+    if not Path(fid).is_file():
+        raise HTTPException(status_code=409, detail="The source video is no longer there (removed by cleanUp?)")
+    orchestrator.active_jobs.add(fid)  # claimed before returning: a second retry in the same instant gets 409
     task = asyncio.create_task(orchestrator.retry_cell(request.video, request.language, request.globalOptions))
     _jobs.add(task)
     task.add_done_callback(_jobs.discard)

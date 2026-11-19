@@ -180,15 +180,18 @@ def wrap_lines(cues: List[Cue], max_chars: int = 50) -> List[Cue]:
     return [replace(c, text="\n".join(_wrap_line(l, max_chars) for l in c.text.split("\n"))) for c in cues]
 
 
-def detect_language(cues: List[Cue], sample: int = 300) -> Optional[str]:
-    """ISO 639-1 of the cues' text (langdetect on up to `sample` cues), or None when there is too little text."""
-    from langdetect import DetectorFactory, LangDetectException, detect
+def detect_language(cues: List[Cue], sample: int = 300, min_probability: float = 0.95) -> Optional[str]:
+    """ISO 639-1 of the cues' text (langdetect on up to `sample` cues), or None when there is too little text or the
+    detection is not clear: a wrong answer would ship an untranslated source as « kept », None means « translate »."""
+    from langdetect import DetectorFactory, LangDetectException, detect_langs
     DetectorFactory.seed = 0
     text = " ".join(c.text for c in cues[:sample] if "♪" not in c.text)
     if len(text.split()) < 20:
         return None
     try:
-        lang = detect(text)
-    except LangDetectException:
+        best = detect_langs(text)[0]
+    except (LangDetectException, IndexError):
         return None
-    return lang.split("-")[0]  # langdetect says zh-cn / zh-tw
+    if best.prob < min_probability:
+        return None
+    return best.lang.split("-")[0]  # langdetect says zh-cn / zh-tw
