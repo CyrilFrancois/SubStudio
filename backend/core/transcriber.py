@@ -1,4 +1,4 @@
-# transcriber.py — VideoTranscriber: Faster-Whisper (turbo, int8, VAD, 4 threads) → AsrResult, with killable audio extraction, language detection and span re-runs. Exports: VideoTranscriber, names_prompt, speech_timeline.
+# transcriber.py — VideoTranscriber: Faster-Whisper (turbo, int8, VAD, 4 threads) → AsrResult, with killable audio extraction, OV detection and span re-runs. Exports: VideoTranscriber, names_prompt, speech_timeline.
 
 import os
 import logging
@@ -119,6 +119,14 @@ class VideoTranscriber:
         lang, prob, _ = self._get_model(model_size or self.default_model_size).detect_language(
             audio, vad_filter=True, vad_parameters=VAD, language_detection_segments=3)
         return lang, prob
+
+    def detect_video_language(self, video_path: str, job: Optional[JobHandle] = None) -> Tuple[str, float]:
+        """The OV of a video whose audio stream carries no language tag (plan() needs it before planning).
+        Raises the same named errors as transcribe() on no audio track, empty audio or no speech."""
+        audio = self.load_audio(video_path, job=job)
+        if not speech_timeline(audio):
+            raise Exception("No speech detected: the audio language cannot be identified.")
+        return self.detect_language(audio)
 
     def transcribe(
         self,

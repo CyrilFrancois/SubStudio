@@ -76,6 +76,11 @@ for name in sorted(os.listdir(d)):
     if os.path.exists(os.path.splitext(path)[0] + ".tmp.wav"):
         fails.append(f"{name}: temp wav left behind")
 
+    lang, prob = t.detect_video_language(path)
+    print(f"   detect_video_language: {lang} ({prob:.2f})")
+    if lang != r.language:
+        fails.append(f"{name}: detect_video_language says {lang}, transcribe said {r.language}")
+
     # Correction re-run: only the given spans, language known (no detection)
     spans = r.speech[:2]
     r2 = t.transcribe(path, path, on_progress, 1, 1, language=r.language, spans=spans)
