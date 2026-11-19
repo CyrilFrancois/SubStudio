@@ -1,4 +1,5 @@
-FROM python:3.10-slim
+# 3.12: pysubs2 1.9.1 requires Python >= 3.12, and the native venvs (bench, tests) run 3.12.
+FROM python:3.12-slim
 
 # 1. Environment configuration
 # PYTHONUNBUFFERED: Essential for real-time progress bars in Docker logs
