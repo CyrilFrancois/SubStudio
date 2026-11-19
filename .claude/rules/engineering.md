@@ -19,7 +19,7 @@ in `SubStudio/CLAUDE.md` or `SubStudio/.claude/rules/*.md`. Map: `doc/harness-mi
 # without running. T="python3 -I C:/Users/cyril/Documents/Workspace/doc/_tools/threads.py"
 #   full suite x3 : $T with heavy --min-free-mb 1500 -- .venv/Scripts/python.exe -m pytest -q
 #   next build    : $T with heavy --min-free-mb 1500 -- npx next build
-#   Whisper turbo : --min-free-mb 2500 (estimate, not measured)   TranslateGemma 4B : --min-free-mb 4000 (D-0003: 3.9 GB peak)
+#   Whisper turbo : --min-free-mb 2500 (measured 1.9 GB peak on a 5-min clip, bench/README.md, 2026-11-19)   TranslateGemma 4B : --min-free-mb 4000 (D-0003: 3.9 GB peak)
 # A single test file and tsc stay free. Never pipe the `with` command: its refusal must stop the chain.
 
 # Frontend — natively (Node at C:\Users\cyril\tools\node, 2026-11-19), from frontend/
