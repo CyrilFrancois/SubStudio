@@ -77,8 +77,7 @@ def _probe(path: str) -> _Probe:
 
 
 def _ffprobe_reason(stderr: Optional[str], path: str) -> str:
-    """'[matroska,webm @ 0000…] EBML header parsing failed
-<path>: Invalid data…' -> 'EBML header parsing failed'."""
+    """First stderr line without its '[matroska,webm @ 0000…]' prefix or the path: 'EBML header parsing failed'."""
     for line in (stderr or "").splitlines():
         line = re.sub(r"^\[[^\]]*\]\s*", "", line.strip()).replace(path, "").strip(" :")
         if line:
@@ -96,12 +95,20 @@ def _probe_cached(path: str, st: os.stat_result) -> _Probe:
         return hit
     result = _probe(path)
     if result.error:
-        # A failure is not cached: the next scan retries instead of remembering a transient error.
         logger.error(f"Probe failed for {path}: {result.error}")
-        return result
+        if result.error.startswith("ffprobe timed out") or result.error.startswith("ffprobe could not run"):
+            return result  # may be transient (busy disk, ffprobe missing): retried next scan
+    # A corrupt file stays corrupt until it changes, and a change changes the key: cache it too.
     with _cache_lock:
         _cache[key] = result
     return result
+
+
+def _prune_cache(keep: set):
+    """Forget probes of files that are gone or changed, so the cache never outgrows the library."""
+    with _cache_lock:
+        for k in [k for k in _cache if k not in keep]:
+            del _cache[k]
 
 
 def _walk(root: str, warnings: List[str]) -> List[Tuple[str, os.stat_result]]:
@@ -125,7 +132,19 @@ def _walk(root: str, warnings: List[str]) -> List[Tuple[str, os.stat_result]]:
     return found
 
 
-def _sidecars(video: str) -> List[SubtitleTrack]:
+# Common sidecar flags that langcodes would otherwise read as languages ('hi' = Hindi).
+SIDECAR_FLAGS = {"hi", "sdh", "cc", "forced", "default"}
+
+
+def _sidecar_language(parts: List[str]) -> Optional[str]:
+    """Movie.fr.srt, Movie.HI.en.srt, Movie.fr.forced.srt -> the language part. A flag counts as a
+    language only when it is the only candidate (Movie.hi.srt stays Hindi)."""
+    candidates = [p for p in parts if _language(p)]
+    real = [p for p in candidates if p.lower() not in SIDECAR_FLAGS]
+    return (real or candidates or [None])[0]
+
+
+def _sidecars(video: str, warnings: List[str]) -> List[SubtitleTrack]:
     folder, name = os.path.split(video)
     stem = os.path.splitext(name)[0].lower()
     tracks: List[SubtitleTrack] = []
@@ -133,14 +152,22 @@ def _sidecars(video: str) -> List[SubtitleTrack]:
         d = os.path.join(folder, sub) if sub else folder
         if not os.path.isdir(d):
             continue
-        for f in sorted(os.listdir(d), key=str.lower):
+        try:
+            names = sorted(os.listdir(d), key=str.lower)
+        except OSError as e:
+            # One unreadable Subs/ folder must not fail the library: say it, list the rest.
+            msg = f"Cannot read folder {d}: {e.strerror}"
+            if msg not in warnings:
+                warnings.append(msg)
+                logger.error(msg)
+            continue
+        for f in names:
             low = f.lower()
-            if not low.endswith(SUB_EXT) or not low.startswith(stem):
+            # The stem must be followed by a dot: Aliens.fr.srt never belongs to Alien.mkv.
+            if not low.endswith(SUB_EXT) or not low.startswith(stem + "."):
                 continue
-            # Movie.fr.srt, Movie.fr.forced.srt, Movie.French.srt: the language is one of the parts
-            # between the stem and the extension; the first part that is a language wins.
             parts = f[len(stem):].split(".")[1:-1]
-            tag = next((p for p in parts if _language(p)), None)
+            tag = _sidecar_language(parts)
             tracks.append(SubtitleTrack(kind="sidecar", language=_language(tag), language_tag=tag,
                                         path=os.path.join(d, f), codec=low.rsplit(".", 1)[-1],
                                         counted=False))
@@ -186,8 +213,11 @@ def _judge(track: SubtitleTrack, settings: Settings, record: Dict[str, str]) -> 
         key = track_key(kind=track.kind, stream_index=track.stream_index, path=track.path)
         if record.get(key) in ORIGINS:
             track = track.model_copy(update={"origin": record[key]})
+    titled = re.match(r"^SubStudio ([a-z]{2})$", track.title or "")
     if track.language is None:
         reason = "no language tag, so it cannot cover any language"
+    elif titled and titled.group(1) != track.language:
+        mine, reason = False, f"its title says {titled.group(1)} but its language tag says {track.language}"
     elif not mine and not settings.count_existing:
         reason = "not made by this SubStudio, and Settings does not count existing subtitles"
     elif track.kind == "embedded" and track.codec in ("hdmv_pgs_subtitle", "dvd_subtitle", "dvb_subtitle"):
@@ -219,9 +249,9 @@ def _coverage(wanted: str, audio: Optional[str], tracks: List[SubtitleTrack], pr
     return LanguageCoverage(language=wanted, resolved=lang, state="missing", reason=reason)
 
 
-def _build(path: str, st: os.stat_result, probe: _Probe, settings: Settings) -> LibraryVideo:
+def _build(path: str, st: os.stat_result, probe: _Probe, settings: Settings, warnings: List[str]) -> LibraryVideo:
     record = _verdicts(path, st)
-    tracks = [_judge(t, settings, record) for t in _embedded(probe) + _sidecars(path)]
+    tracks = [_judge(t, settings, record) for t in _embedded(probe) + _sidecars(path, warnings)]
     audio = _audio_language(probe)
     coverage = [_coverage(lang, audio, tracks, probe.error) for lang in settings.languages]
     rel = os.path.relpath(os.path.dirname(path), MEDIA_ROOT)
@@ -248,7 +278,8 @@ def scan_library(settings: Settings) -> LibraryResponse:
     entries = _walk(MEDIA_ROOT, warnings)
     with ThreadPoolExecutor(max_workers=PROBE_WORKERS) as pool:
         probes = list(pool.map(lambda e: _probe_cached(*e), entries))
-    videos = [_build(p, st, pr, settings) for (p, st), pr in zip(entries, probes)]
+    videos = [_build(p, st, pr, settings, warnings) for (p, st), pr in zip(entries, probes)]
+    _prune_cache({(os.path.normcase(p), st.st_mtime_ns, st.st_size) for p, st in entries})
     _paths.clear()
     _paths.update({v.id: v.path for v in videos})
     return LibraryResponse(root=MEDIA_ROOT, languages=settings.languages,

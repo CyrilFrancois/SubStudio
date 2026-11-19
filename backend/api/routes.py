@@ -45,8 +45,11 @@ async def get_library():
     settings = _settings()
     try:
         lib = await asyncio.to_thread(library.scan_library, settings)
-    except FileNotFoundError as e:
+    except FileNotFoundError as e:  # only raised for the media root itself
         raise HTTPException(status_code=503, detail=str(e))
+    except OSError as e:
+        logger.error(f"Library scan failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Could not read the media folder: {e.strerror or e}")
     _last_library = lib
     return _stub().overlay(lib) if STUB else lib
 

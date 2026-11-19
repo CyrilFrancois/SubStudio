@@ -68,7 +68,7 @@ class LibraryVideo(BaseModel):
     duration_s: Optional[float] = Field(None, description="Seconds; null when ffprobe could not read it.")
     audio_language: Optional[LanguageCode] = Field(None, description="Language tag of the first audio track (OV), null when untagged.")
     validated: bool = Field(..., description="Every wanted language passed as a SubStudio track: Start skips this video.")
-    marker_languages: Optional[List[LanguageCode]] = Field(None, description="Languages the file name claims, '(Sub-OV,EN)' -> ['ov','en'].")
+    marker_languages: Optional[List[LanguageCode]] = Field(None, description="Languages the file name claims, '(Sub-EN,FR)' -> ['en','fr']; a claim, not a proof.")
     coverage: List[LanguageCoverage] = Field(..., description="One entry per wanted language, in Settings order.")
     tracks: List[SubtitleTrack] = Field(..., description="Every subtitle found, counted or not.")
     probe_error: Optional[str] = Field(None, description="Set when ffprobe failed: coverage is then unknown, not missing.")
