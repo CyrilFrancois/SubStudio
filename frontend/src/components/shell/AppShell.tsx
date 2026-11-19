@@ -4,9 +4,10 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { AlertTriangle, Library, ListOrdered, Settings, Server, ServerOff } from 'lucide-react';
+import { AlertTriangle, CircleHelp, Library, ListOrdered, Settings, Server, ServerOff } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
 import type { SystemStatus } from '@/lib/types';
+import Guide, { useGuide } from './Guide';
 
 const NAV = [
   { href: '/', label: 'Library', icon: Library },
@@ -18,6 +19,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const path = usePathname();
   const [system, setSystem] = useState<SystemStatus | null>(null);
   const [down, setDown] = useState<string | null>(null);
+  const guide = useGuide();
 
   useEffect(() => {
     let alive = true;
@@ -53,6 +55,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             );
           })}
         </ul>
+        <div className="px-3 pb-3">
+          <button type="button" onClick={guide.show}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-gray-400 hover:text-gray-200 hover:bg-white/5">
+            <CircleHelp size={16} aria-hidden /> How it works
+          </button>
+        </div>
         <div className="px-5 py-4 border-t border-white/5 text-xs space-y-1.5">
           {down ? (
             <div className="flex items-start gap-2 text-red-400" role="status">
@@ -85,6 +93,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         )}
         <main className="flex-1 min-h-0 overflow-hidden">{children}</main>
       </div>
+      {guide.open && <Guide onClose={guide.close} />}
     </div>
   );
 }

@@ -38,6 +38,23 @@ export function coverageLabel(c: LanguageCoverage): string {
   }
 }
 
+/** The one-sentence why, shown under the cell without a click (null when the label says it all). */
+export function coverageNote(c: LanguageCoverage): string | null {
+  switch (c.state) {
+    case 'passed':
+      if (c.origin === 'existing') return 'counted without a check';
+      return c.from_language ? `from ${languageName(c.from_language)}` : null;
+    case 'missing':
+      if (c.language === 'ov' && !c.resolved) return 'detected from the audio at Start';
+      return c.reason ?? null;
+    case 'unchecked': return 'checked when the video is started';
+    case 'pending': return null;
+    case 'running': return null;
+    case 'failed': return c.reason ?? 'no reason recorded: open the job log in the Queue';
+    case 'unknown': return c.reason ?? null;
+  }
+}
+
 function Icon({ state }: { state: LanguageCoverage['state'] }) {
   const p = { size: 13, 'aria-hidden': true } as const;
   switch (state) {
