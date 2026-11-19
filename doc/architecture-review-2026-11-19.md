@@ -57,8 +57,9 @@ llama.cpp `--threads 4`), not by hope.
    `faster-whisper==1.0.3` is pinned below the release that added `turbo` (1.1.0; latest 1.2.1, 2025-10-31,
    https://pypi.org/project/faster-whisper/, checked 2026-11-19). No VAD filter, so silences produce hallucinated lines.
 8. **The output doubles the library's disk use:** every video is copied into a full new MKV. Plex, Jellyfin, VLC and mpv
-   all read a sidecar `Movie.fr.srt` **(hypothesis: true for those players' default settings)**. Make sidecar the
-   default and muxing an option.
+   all read a sidecar `Movie.fr.srt` **(hypothesis: true for those players' default settings)**. ~~Make sidecar the
+   default and muxing an option.~~ Cyril chose instead to update the source file in place with a `(Sub-…)` name
+   marker (`user-process.md` §4), which also avoids the doubling.
 9. **Smaller ones:** the ISO 639 map is hand-written and partial (use `langcodes`); `types.ts` mirrors backend JSON by
    hand (generate from FastAPI's OpenAPI); the scanner runs ffprobe on every video on every scan (cache by
    path + mtime + size); the `srt` workflow mode means the same as `hybrid`.
@@ -66,6 +67,10 @@ llama.cpp `--threads 4`), not by hope.
 ## 4. Target design
 
 ### 4.1 The subtitle ladder: the best subtitle is the one a human already wrote
+
+**Superseded in part by Cyril's process, `user-process.md` (D-0002), which wins:** every rung ends at a quality gate
+(synced? good file?), a pre-existing subtitle is evaluated rather than trusted, ASR gets an OV correction pass, and the
+output is the source file updated in place by a verified swap (confirmed by Cyril), not a sidecar. The rungs below stay valid.
 
 For each video and each wanted language, take the first rung that succeeds:
 

@@ -22,6 +22,11 @@ candidate models: `doc/architecture-review-2026-11-19.md`.
 - **For whom:** Cyril, in three roles: processing a single video, running a batch overnight, watching the result.
 - **Goal:** a library where every video carries correct, well-timed subtitles in the wanted languages, with no
   manual step between dropping a file in `/data` and playing `{stem}_SubStudio.mkv`.
+- **The user process (Cyril, 2026-11-19; D-0002): `doc/user-process.md` is the product spec and wins over the
+  reviews.** Select files → languages (default OV · EN · FR, remembered) → per video × language: keep a good existing
+  subtitle, else download, else translate with context, else ASR + OV correction + translate; every result passes a
+  sync + quality gate; the file is updated in place with a `(Sub-OV,EN,FR)` name marker (Cyril confirmed in-place
+  replacement everywhere, `C:\Videos` included, 2026-11-19; only by the verified swap of « Forbidden » below).
 - **Metric (inferred, not measured yet):** share of a batch that ends in a playable MKV with every requested
   track, and minutes of attention per video. Basis: the overnight-batch role; wrong if Cyril only processes
   single videos.
@@ -41,14 +46,31 @@ correct fix that makes the workflow worse is still wrong.
 
 ## Phase and what it forbids
 - **Phase:** build, active since 2026-11-18 (paused 2026-08-21 to 2026-11-18). Local only: no hosted deployment.
-- **Forbidden:** testing with `cleanUp=true` on real media (it deletes the source); touching Cyril's library
-  beyond the exact files a test created. Commit and push are Claude's (`.claude/rules/git-and-secrets.md` §9).
+- **Test corpus (Cyril, 2026-11-19): `C:\Videos` is the media test folder.** Today: `C:\Videos\Ghosts\Saison 5\`,
+  22 MKV episodes of Ghosts (2021) S05E01–E22, 14 GB, 720p/1080p, H.264/HEVC, English audio. Every video there is
+  to be subtitled, and **is treated as having no subtitles**: 15 carry tracks made by an older SubStudio, which are
+  not good and carry no marker telling them from release tracks.
+- **Every pre-existing subtitle is untrusted by default,** embedded tracks AND sidecars (the old SubStudio wrote
+  `{stem}.{lang}.srt` by default). The setting `count_existing` (« Count subtitles not made by this SubStudio ») is
+  OFF by default: such a subtitle then never counts as coverage, never makes the planner skip a language, and is
+  never used as a scoring reference; the UI shows the language as missing with « ignored: <lang> <embedded|sidecar> ».
+  What the new SubStudio writes is recognised by ONE rule, `backend/core/provenance.py` (muxed track title
+  « SubStudio {lang} », sidecars listed in the per-video manifest), and does count.
+- **Forbidden:** `cleanUp=true`, or deleting or overwriting any source video by any path other than the **verified
+  swap** (in `C:\Videos` too: 14 GB to re-fetch); touching anything outside `C:\Videos` beyond the exact files a test
+  created. **The verified swap is the one allowed way to replace a source** (Cyril, 2026-11-19, D-0002): write the new
+  file next to the source under a temporary name, verify it (same video and audio streams, duration within 1 s, every
+  new subtitle track present and decodable), then atomic rename onto the source; a failed check leaves the source
+  untouched and deletes only the temp file. Any other output is a new file next to the source, removed by exact name
+  when a test made it. Commit and push are Claude's
+  (`.claude/rules/git-and-secrets.md` §9).
 
 ## Sources of record
 | Source | URL or path | Access | Notes |
 |---|---|---|---|
 | Code | https://github.com/CyrilFrancois/SubStudio (public), local `SubStudio/` | Cyril's GitHub account | `origin/main` is production; renamed from videosToSubtitledvideos on 2026-11-18 |
 | App | http://localhost:3000 (UI), http://localhost:8000/health (API) | `docker compose up --build` | no database; state in memory |
+| Test corpus | `C:\Videos` (mounted as `/data` in Docker; `SUBSTUDIO_MEDIA_ROOT` natively) | local | Cyril's test videos; rules in « Phase and what it forbids » |
 | Gemini key | https://aistudio.google.com/apikey | Cyril's Google account | value lives in `SubStudio/.env` only |
 | Backlog | workspace `TODOLIST.MD`, `### [SubStudio]` below the marker | Claude keeps it; Cyril's notes go above the marker | ordered by the architecture review |
 | Pre-harness files | `_archive/2026-11-18_*-before-harness.md` (gitignored) | local | byte-exact copies |
@@ -96,9 +118,9 @@ What is specific to SubStudio; the rest of the working method is workspace `CLAU
 - **Deep fix, never workaround** (workspace `CLAUDE.md` §4), with SubStudio's own examples:
 
   Two specific traps:
-  1. **Asking the LLM to behave is a hope, not a fix.** `translator._build_system_prompt` tells the
-     model to preserve indices and timestamps. It mostly does. If a value is *computable*, compute
-     and enforce it in Python rather than adding another sentence to the prompt.
+  1. **Asking the LLM to behave is a hope, not a fix.** The translator used to be asked to keep SRT
+     indices and timestamps; now it never sees a timing (`core/subtitles`, ids only). If a value is
+     *computable*, compute and enforce it in Python rather than adding another sentence to the prompt.
   2. **A detector is an alarm, not a repair.** Logging that something went wrong is right, but a
      run where it fires is still broken. Ship the detection *and* the repair.
   3. **The symptom cleared downstream.** If the error count is green but the invariant is still
@@ -106,9 +128,8 @@ What is specific to SubStudio; the rest of the working method is workspace `CLAU
      if you can write "each patch was a workaround for the same thing", the refactor is the task.
      A bigger fix is not a reason to defer it: say so and start it.
 
-  Generated output is checked against its inputs: every index and timestamp the model returns is
-  matched to the source blocks *by position computed in Python*, never by text a translation
-  changes. Prompt only for what needs judgement; gate the rest deterministically.
+  Generated output is checked against its inputs: every answer is matched to the source cues *by
+  id*, a batch whose id set differs is rejected, and timings come from the source only. Prompt only for what needs judgement; gate the rest deterministically.
 
 - **A comment is not a mechanism.** "Keep these in sync" is not what keeps backend JSON and
   `types.ts` in sync — one source, or a check, is.
