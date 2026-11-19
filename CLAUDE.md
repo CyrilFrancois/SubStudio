@@ -135,7 +135,9 @@ What is specific to SubStudio; the rest of the working method is workspace `CLAU
      A bigger fix is not a reason to defer it: say so and start it.
 
   Generated output is checked against its inputs: every answer is matched to the source cues *by
-  id*, a batch whose id set differs is rejected, and timings come from the source only. Prompt only for what needs judgement; gate the rest deterministically.
+  id*, a batch whose id set differs is rejected, and timings come from the source only (one computed exception: a
+  line SubStudio made that is too fast to read keeps its start and ends later, into the silence before the next one,
+  `core/subtitles/reading.ease_reading`). Prompt only for what needs judgement; gate the rest deterministically.
 
 - **A comment is not a mechanism.** "Keep these in sync" is not what keeps backend JSON and
   `types.ts` in sync — one source, or a check, is.

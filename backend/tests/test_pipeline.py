@@ -80,7 +80,10 @@ def test_sidecar_to_mkv_keeps_timings_accents_and_clips_past_the_end(clip):
     track = subprocess.run(["ffmpeg", "-v", "error", "-i", str(out), "-map", "0:s:0", "-f", "srt", "-"],
                            capture_output=True).stdout.decode("utf-8").replace("\r\n", "\n")
     assert "00:00:00,750 --> 00:00:01,450\n[fr] BONJOUR HÉLÈNE." in track          # +0.25 s sync, accents kept
-    assert "00:00:01,750 --> 00:00:02,650\n" in track
+    # Line 2 (55 characters in 0.9 s) is too fast to read: its start stays, its end runs into the silence after it,
+    # here to the end of the clip (core/subtitles/reading.ease_reading).
+    end2 = next(l for l in track.splitlines() if l.startswith("00:00:01,750 --> ")).split(" --> ")[1]
+    assert end2 > "00:00:02,650"
     assert "TROP TARD" not in track                                               # starts after the clip ends
     assert all(len(l) <= 50 for l in track.splitlines())                         # lines wrapped before writing
     assert not clip.with_suffix(".fr.srt").exists()                               # no sidecar copy (D-0002 §4)
