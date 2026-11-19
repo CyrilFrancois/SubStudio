@@ -107,6 +107,9 @@ class VideoRun:
     # The gate's speech spans (ms) and the audio's length (ms), read once per video and reused by a retry.
     speech: Optional[Tuple[List[Tuple[int, int]], Optional[int]]] = None
     output_path: Optional[str] = None  # the video's name after the in-place swap renamed it (core/output.write_run)
+    # The audio's language when this run detected it with probability ≥ 0.9 (OV detection or Whisper): the swap
+    # writes it on the first audio stream if that stream is untagged, so « OV » resolves after a rescan.
+    audio_tag: Optional[str] = None
     # The gate's verdict on each pre-existing subtitle it judged, (kind, ref) → passed; written to the verdict
     # record after the output step (core/output.verdict_record), so the Library says kept or rejected.
     judged: Dict[Tuple[str, str], bool] = field(default_factory=dict)

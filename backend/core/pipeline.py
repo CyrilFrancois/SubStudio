@@ -31,6 +31,9 @@ from .translators import make_translator
 
 # /data inside Docker; set SUBSTUDIO_MEDIA_ROOT (e.g. C:/Videos) when the backend runs natively.
 MEDIA_ROOT = os.getenv("SUBSTUDIO_MEDIA_ROOT", "/data")
+# How sure the spoken-language detection must be before SubStudio trusts it: for a transcript's language, and for
+# the tag it writes on an untagged audio stream (a wrong tag would make « OV » name the wrong language for good).
+OV_TAG_MIN_PROBABILITY = 0.9
 
 logger = logging.getLogger("SubStudio.Pipeline")
 
@@ -148,6 +151,8 @@ class PipelineOrchestrator:
             if kept:
                 logger.info(f"{p} Step 2/5: transcription reused ({len(kept[0])} lines, same audio and model)")
                 event_manager.emit(run.path, "transcribing", 100, f"{p} Step 2/5: transcription reused")
+                if kept[1] and run.audio_tag is None:   # the cached language was stored only when Whisper was sure
+                    run.audio_tag = kept[1]
                 return kept
             # Rung 4 can transcribe between two languages' translations: the translation model is freed first,
             # so Whisper and the LLM are never in RAM together (D-0001), whatever order the ladder takes.
@@ -156,7 +161,10 @@ class PipelineOrchestrator:
                 video_path=str(current_path(run)), file_id=run.path, on_progress=event_manager.emit,
                 current_file=index + 1, total_files=total, model_size=opts.transcriptionEngine, job=job)
             # Whisper hears the language; text detection only guesses it. Trusted when Whisper is sure.
-            result = asr.to_cues(), (asr.language if asr.language_probability >= 0.9 else None)
+            sure = asr.language_probability >= OV_TAG_MIN_PROBABILITY
+            if sure and run.audio_tag is None:
+                run.audio_tag = asr.language
+            result = asr.to_cues(), (asr.language if sure else None)
             if key:
                 artifacts().save_asr(key, *result)
             return result
@@ -303,6 +311,8 @@ class PipelineOrchestrator:
                 # Untagged audio: Whisper identifies the language on a sample, without a full transcription.
                 original, prob = await asyncio.to_thread(self.transcriber.detect_video_language, video.path, job)
                 logger.info(f"{p} OV detected as {original} (probability {prob:.2f})")
+                if prob >= OV_TAG_MIN_PROBABILITY:
+                    run.audio_tag = original    # written on the untagged audio by the swap (core/output)
             plans = plan(video.out, existing, original, downloads_enabled=self.downloads_enabled)
             run.plans = {lp.language: lp for lp in plans}
             run.cells = {lp.language: Cell(lp.language) for lp in plans if not lp.source_only}

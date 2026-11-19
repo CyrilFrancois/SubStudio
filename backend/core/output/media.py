@@ -97,6 +97,13 @@ def _duration(info: dict) -> float:
         raise OutputError("the video has no readable duration")
 
 
+def _untagged_audio(info: dict) -> bool:
+    """True when the first audio stream (the one « OV » reads) has no language: no tag, « und », or not a language.
+    False when it is tagged, or when the video has no audio at all (nothing to tag)."""
+    audio = [s for s in info.get("streams", []) if s.get("codec_type") == "audio"]
+    return bool(audio) and normalize_language(audio[0].get("tags", {}).get("language")) is None
+
+
 def _kept_subs(info: dict, new_langs: Set[str]) -> List[dict]:
     """Existing subtitle tracks that stay: all of them, except OUR previous track of a language being rewritten."""
     kept = []
