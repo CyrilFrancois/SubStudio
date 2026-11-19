@@ -66,6 +66,12 @@ Why not the others:
   bench could not: a two-speaker cue came back on one line (« Oui, je l'ai vu. – Vous aussi ? »); the dashed
   line per speaker is now restored in Python from the source cue's layout.
 
+- **First full episode (Ghosts S05E12 FR, workspace-35, 2026-11-19):** the FR cell failed after ~45 min on ONE cue
+  of 513: TranslateGemma's numbered replies drift (an id followed by « / », a space or a no-break space; a cue's
+  translation wrapped over two lines; two cues merged: 65 rejected batches). Fixed on `fix/translator-replies`: a
+  tolerant parser, a one-cue call in plain text (no id to get wrong), and a cue still wrong alone kept in the
+  source language and named instead of discarding the language (`translate_cues(left_in_source=…)`).
+
 - At 5.5 s per cue on a busy PC, a 45-minute episode (~700 cues) takes **about 1 hour per language**: an overnight
   batch, not an interactive one. A quiet-machine measurement is owed before quoting a time to Cyril.
 - The model is loaded only during a video's translation and unloaded before the next transcription (`unload()`).

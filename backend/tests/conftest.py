@@ -1,4 +1,4 @@
-# conftest.py — Shared pytest fixtures: the seeded edge-case media, built once per session in a temp folder; tests run offline. Exports: media.
+# conftest.py — Shared pytest fixtures: the seeded edge-case media, built once per session in a temp folder; tests run offline. Exports: media, own_artifacts.
 import os
 import tempfile
 
@@ -11,6 +11,16 @@ os.environ["SUBSTUDIO_DOWNLOADS"] = "0"
 os.environ["SUBSTUDIO_WORK_DIR"] = tempfile.mkdtemp(prefix="substudio-work-")
 # …nor in the real state folder: the job store (jobs.sqlite3) and settings.json of a test live in a temp dir.
 os.environ.setdefault("SUBSTUDIO_STATE_DIR", tempfile.mkdtemp(prefix="substudio-state-"))
+
+
+@pytest.fixture(autouse=True)
+def own_artifacts(tmp_path_factory):
+    # Each test starts with no finished work kept (core/artifacts): a transcription or translated lines cached by
+    # one test would otherwise answer the next one, which then never runs what it tests.
+    from core.artifacts import ArtifactCache, use_artifacts
+    use_artifacts(ArtifactCache(tmp_path_factory.mktemp("artifacts")))  # never inside a test's own folder
+    yield
+    use_artifacts(None)
 
 
 @pytest.fixture(scope="session")
