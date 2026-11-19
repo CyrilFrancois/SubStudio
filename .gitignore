@@ -25,3 +25,4 @@ _archive/
 .pytest_cache/
 bench/clips/
 bench/clips.local.json
+backend/.state/
