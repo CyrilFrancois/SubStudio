@@ -146,12 +146,27 @@ class Align(unittest.TestCase):
             align(self.ref_path, empty, os.path.join(self.dir, "out.srt"))
 
 
+SRT = "1\n00:00:01,000 --> 00:00:02,500\nBonjour à tous.\n\n2\n00:00:03,000 --> 00:00:04,000\nÇa va ?\n"
+
+
+class _Sub:
+    """A listed subtitle as subliminal hands it over: language, provider, score, text once downloaded."""
+    def __init__(self, provider, score, ok=True, lang="fra", hash_match=False):
+        from babelfish import Language
+        self.language, self.provider_name, self.score, self.ok = Language(lang), provider, score, ok
+        self.text, self._hash = None, hash_match
+
+    def get_matches(self, video):
+        return {"hash"} if self._hash else {"series"}
+
+
 class _FakePool:
     """Stands in for subliminal's ProviderPool: no network, scripted outcome."""
-    def __init__(self, initialized, failed, found=(), best=()):
+    def __init__(self, initialized, failed, found=()):
         self.initialized_providers = {n: object() for n in initialized}
         self.failed_providers = set(failed)
-        self._found, self._best = list(found), list(best)
+        self._found = list(found)
+        self.downloaded = []
 
     def __enter__(self):
         return self
@@ -162,56 +177,130 @@ class _FakePool:
     def list_subtitles(self, video, langs):
         return self._found
 
-    def download_best_subtitles(self, found, video, langs, min_score):
-        return self._best
+    def download_subtitle(self, sub):
+        self.downloaded.append(sub.score)
+        if sub.ok:
+            sub.text = SRT
+        return sub.ok
+
+
+def _patched(pool):
+    from core.acquire import download as dl
+    video = Episode("Show.S01E02.mkv", "Show", 1, [2])
+    return [mock.patch.object(dl, "scan_video", return_value=video), mock.patch.object(dl, "refine"),
+            mock.patch.object(dl, "ProviderPool", return_value=pool),
+            mock.patch.object(dl, "compute_score", side_effect=lambda s, v: s.score)]
+
+
+def _download(pool, try_one=None, per_language=1):
+    from contextlib import ExitStack
+    from core.acquire import download as dl
+    with ExitStack() as stack:
+        for p in _patched(pool):
+            stack.enter_context(p)
+        return dl.download_subtitles("Show.S01E02.mkv", ["fr"], tempfile.mkdtemp(prefix="substudio-dl-"), env={},
+                                     try_one=try_one, per_language=per_language)
 
 
 class DownloadOutcomes(unittest.TestCase):
-    def _run(self, pool):
-        from core.acquire import download as dl
-        video = Episode("Show.S01E02.mkv", "Show", 1, [2])
-        with mock.patch.object(dl, "scan_video", return_value=video), mock.patch.object(dl, "refine"), \
-                mock.patch.object(dl, "ProviderPool", return_value=pool):
-            return dl.download_subtitles("Show.S01E02.mkv", ["fr"], tempfile.mkdtemp(prefix="substudio-dl-"), env={})
-
     def test_every_asked_provider_failing_is_not_reported_as_nothing_found(self):
         from core.acquire import ProvidersUnavailable
         with self.assertRaises(ProvidersUnavailable):
-            self._run(_FakePool(initialized=["gestdown"], failed=["gestdown", "podnapisi"]))
+            _download(_FakePool(initialized=["gestdown"], failed=["gestdown", "podnapisi"]))
 
     def test_partial_outage_is_reported_with_the_empty_result(self):
-        r = self._run(_FakePool(initialized=["gestdown", "podnapisi"], failed=["podnapisi"]))
+        r = _download(_FakePool(initialized=["gestdown", "podnapisi"], failed=["podnapisi"]))
         self.assertEqual(r.subtitles, {})
         self.assertEqual(r.failed_providers, frozenset({"podnapisi"}))
 
     def test_no_provider_applies_is_a_clean_empty_result(self):
-        r = self._run(_FakePool(initialized=[], failed=[]))
+        r = _download(_FakePool(initialized=[], failed=[]))
         self.assertEqual((r.subtitles, r.failed_providers), ({}, frozenset()))
 
 
+class Candidates(unittest.TestCase):
+    """S05E12 (2026-11-19): the best EN drifted 5.7 s and the best FR landed 2.4 s off, while 6 EN were listed."""
+
+    def _pool(self, *subs):
+        return _FakePool(initialized=["gestdown"], failed=[], found=list(subs))
+
+    def test_a_turned_down_candidate_makes_room_for_the_next_best(self):
+        seen = []
+
+        def try_one(lang, d):
+            seen.append(os.path.basename(d.path))
+            return "timing moves -5.7 s between the first and second half" if len(seen) == 1 else None
+        pool = self._pool(_Sub("gestdown", 650), _Sub("gestdown", 700), _Sub("podnapisi", 600))
+        r = _download(pool, try_one, per_language=3)
+        self.assertEqual(pool.downloaded, [700, 650])                       # best first, then the next
+        self.assertEqual(seen, ["Show.S01E02.fr.1.srt", "Show.S01E02.fr.2.srt"])
+        self.assertEqual(r.rejected["fr"], ["gestdown #1: timing moves -5.7 s between the first and second half"])
+        self.assertTrue(r.subtitles["fr"].path.endswith("Show.S01E02.fr.2.srt"))
+        with open(r.subtitles["fr"].path, encoding="utf-8") as f:
+            self.assertIn("Bonjour à tous.", f.read())                       # saved as UTF-8 SRT
+
+    def test_the_cap_stops_the_search_and_every_try_is_listed(self):
+        pool = self._pool(*[_Sub("gestdown", 700 - i) for i in range(6)])
+        r = _download(pool, lambda lang, d: "out of sync: shifted +2.4 s from the speech", per_language=3)
+        self.assertEqual(pool.downloaded, [700, 699, 698])
+        self.assertEqual(len(r.rejected["fr"]), 3)
+        self.assertNotIn("fr", r.subtitles)
+
+    def test_a_candidate_for_another_episode_is_never_tried(self):
+        pool = self._pool(_Sub("gestdown", 500))                            # under series+season+episode = 594
+        r = _download(pool, lambda lang, d: None, per_language=3)
+        self.assertEqual((pool.downloaded, r.subtitles, r.rejected), ([], {}, {}))
+
+    def test_a_download_that_fails_is_noted_and_the_next_is_tried(self):
+        pool = self._pool(_Sub("opensubtitlescom", 700, ok=False), _Sub("gestdown", 650))
+        r = _download(pool, lambda lang, d: None, per_language=3)
+        self.assertEqual(r.rejected["fr"], ["opensubtitlescom #1: could not be downloaded"])
+        self.assertEqual(r.subtitles["fr"].provider, "gestdown")
+
+
 class FetchBranches(unittest.TestCase):
-    def _report(self, hash_match):
-        from core.acquire.download import Downloaded, DownloadReport
-        return DownloadReport({"fr": Downloaded("fr", "/w/downloaded/x.fr.srt", "gestdown", hash_match)},
-                              frozenset({"podnapisi"}))
+    """fetch() re-times each candidate and hands it to the gate; a turned-down one makes room for the next."""
+
+    def _fetch(self, subs, align=None, accept=None):
+        from contextlib import ExitStack
+        f = importlib.import_module("core.acquire.fetch")
+        pool = _FakePool(initialized=["gestdown"], failed=[], found=list(subs))
+        with ExitStack() as stack:
+            for p in _patched(pool):
+                stack.enter_context(p)
+            al = stack.enter_context(mock.patch.object(f, "align", side_effect=align))
+            r = f.fetch("Show.S01E02.mkv", ["fr"], tempfile.mkdtemp(prefix="substudio-fetch-"), env={}, accept=accept)
+        return r, al
 
     def test_hash_match_skips_alignment(self):
-        f = importlib.import_module("core.acquire.fetch")
-        with mock.patch.object(f, "download_subtitles", return_value=self._report(True)), \
-                mock.patch.object(f, "align") as al:
-            r = f.fetch("v.mkv", ["fr"], "/w")
+        r, al = self._fetch([_Sub("opensubtitlescom", 971, hash_match=True)])
         al.assert_not_called()
-        self.assertTrue(r.subtitles["fr"].synced)
-        self.assertEqual(r.failed_providers, frozenset({"podnapisi"}))
+        self.assertEqual((r.subtitles["fr"].synced, r.subtitles["fr"].offset_seconds), (True, 0.0))
 
-    def test_align_failure_keeps_the_downloaded_subtitle(self):
+    def test_a_candidate_that_cannot_be_retimed_is_turned_down_and_the_next_tried(self):
         from core.acquire import AlignError
-        f = importlib.import_module("core.acquire.fetch")
-        with mock.patch.object(f, "download_subtitles", return_value=self._report(False)), \
-                mock.patch.object(f, "align", side_effect=AlignError("boom")):
-            r = f.fetch("v.mkv", ["fr"], "/w")
-        a = r.subtitles["fr"]
-        self.assertEqual((a.path, a.synced), ("/w/downloaded/x.fr.srt", False))
+        from core.acquire.align import AlignResult
+        calls = []
+
+        def align(video, sub, out):
+            calls.append(sub)
+            if len(calls) == 1:
+                raise AlignError("boom")
+            if len(calls) == 2:
+                return AlignResult(out, False, None)                     # untrustworthy alignment
+            return AlignResult(sub, True, -1.5)
+        r, _ = self._fetch([_Sub("gestdown", 700), _Sub("gestdown", 690), _Sub("gestdown", 680)], align=align)
+        self.assertEqual(r.rejected["fr"], ["gestdown #1: could not be re-timed: boom",
+                                            "gestdown #2: could not be matched to the audio"])
+        self.assertEqual(r.subtitles["fr"].offset_seconds, -1.5)
+
+    def test_the_gate_turning_one_down_makes_room_for_the_next(self):
+        from core.acquire.align import AlignResult
+        verdicts = iter(["out of sync: shifted +2.4 s from the speech", None])
+        r, _ = self._fetch([_Sub("gestdown", 700), _Sub("podnapisi", 650)],
+                           align=lambda v, s, o: AlignResult(s, True, -10.09), accept=lambda lang, p: next(verdicts))
+        self.assertEqual(r.rejected["fr"], ["gestdown #1: out of sync: shifted +2.4 s from the speech"])
+        self.assertEqual(r.subtitles["fr"].provider, "podnapisi")
 
 
 if __name__ == "__main__":
