@@ -77,7 +77,7 @@ With `cleanUp`, the source is deleted only when every cell passed: it is what a 
 - **Paths with spaces and non-ASCII.** `file_id` is a full path used as the SSE routing key. It
   must be URL-encoded exactly **once** — encoding twice yields a key no emitter ever writes to,
   and the stream silently delivers nothing.
-- **Subtitles past the end of the video.** `subtitles.drop_after` (called by `muxer.mux`) drops them; a player will
+- **Subtitles past the end of the video.** `subtitles.drop_after` (called by `core/output/inplace.py`) drops them; a player will
   otherwise hold a black frame.
 - **Zero-byte and corrupt media.** `extract_audio` returns `""`, which must raise, not proceed.
 
@@ -169,8 +169,9 @@ and lost on restart.
   REST (`httpx`, no SDK), `thinkingLevel: low`, JSON output with a response schema, 30 cues per
   call, temperature 0.2. `get_context_profile()` builds a story bible from the filename.
   `_generate` raises on any HTTP error, missing candidate, or `finishReason != STOP`.
-- `backend/core/muxer.py` — copies existing streams, appends the AI tracks with ISO 639-2 tags.
-  Output is `{stem}_SubStudio.mkv` **next to the source**, not in a separate folder.
+- `backend/core/output/` — the only output: `write_run` updates the source **in place** by a verified swap
+  (temp file → verify streams, flags, duration, new tracks → atomic rename), adds the `(Sub-EN,FR)` marker of the
+  actual languages, tags each new track with its origin (`core/provenance`), leaves an untouched video as it was.
 - `backend/core/subtitle_processor.py` — finds the first embedded text track and extracts it as
   cues (raises on failure). **Currently unused** — see the workspace `TODOLIST.MD` (« [SubStudio] backlog »).
 - `backend/core/events.py` — `EventManager`, one broadcast channel per `file_id`, thread-safe.
