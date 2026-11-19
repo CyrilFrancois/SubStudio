@@ -48,12 +48,15 @@ measurement first, by a model only for what needs judgement (workspace rule: a c
 
 | Check | Measured how | Threshold |
 |---|---|---|
-| Synced | share of cues that overlap detected speech (VAD); offset that `ffsubsync` would apply | **hypothesis:** ≥ 85 % overlap, offset ≤ 0.5 s; set on the bench set |
-| Right language | language identification on the cue text vs the track's label | must match |
-| Complete | cues cover the speech of the whole video (no 10-minute gap while people talk) | **hypothesis:** ≥ 90 % of speech covered |
-| Readable | characters per second, line length, empty or duplicated cues, valid encoding (no `?` or U+FFFD where accents were) | **hypothesis:** ≤ 20 cps on 95 % of cues |
-| Translated | every cue id present; no cue left in the source language | exact |
+| Synced | offset of the cues against detected speech (Silero VAD, 10 ms cross-correlation), its change between the two halves, share of dialogue-cue time on speech | **set on the bench:** \|offset\| ≤ 0.5 s, \|change\| ≤ 0.5 s, ≥ 75 % on speech (good human tracks: ≥ 81 %; the guessed 85 % rejected 5 of them) |
+| Right language | language identification on the cue text vs the language wanted; a track's tag, when present, must agree (a missing tag is no fault) | must match |
+| Complete | share of speech time with a cue within 1 s (no 10-minute gap while people talk) | **set on the bench:** ≥ 90 % (good tracks: ≥ 98 %) |
+| Readable | characters per second, line length, duplicated cues, valid encoding (no U+FFFD, no UTF-8 read as cp1252, no `?` inside a word) | **set on the bench:** ≤ 35 cps on 95 % of cues; the guessed 20 cps rejected every human broadcast caption (their 95th percentile is 25–32 cps) |
+| Translated | every cue id present; no cue of 3+ words left identical to its source cue | exact; ≤ 2 % untranslated |
 | Fluent (judgement) | a local model scores a sample of cues; gated by the checks above, never alone | to define on the bench |
+
+Implemented in `backend/core/gate` (one limit table, `THRESHOLDS` in `verdict.py`); how each limit was set and the
+proof both ways (17 real tracks, 128 seeded bad copies): `doc/gate-bench.md`.
 
 Each video × language ends with a **verdict and its origin** (`kept`, `downloaded`, `translated from <lang>`,
 `transcribed`) and, when it failed, **one sentence saying why**.
