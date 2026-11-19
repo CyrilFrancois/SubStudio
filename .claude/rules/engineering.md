@@ -159,6 +159,12 @@ and lost on restart.
   `Origin` (`kept`, `downloaded`, `translated from en`, `transcribed`) or a one-sentence reason. A source already
   in the wanted language (detected) is kept, never translated. `VideoRun` keeps the source and every cell's cues
   in memory for `POST /api/retry`. The ladder (`core/acquire`) and the quality gate plug in here.
+- `backend/core/context/` — `get_context(video_path, cues)` → `TranslationContext` with looked-up facts only
+  (user-process §2 rung 3): `guessit` on the file name, TVmaze for an episode (keyless, CC BY-SA, ≥ 20 calls/10 s:
+  https://www.tvmaze.com/api), characters and proper nouns counted from the cues as the glossary. A name shared by
+  several shows needs the filename's year, else nothing is looked up. Network failure → what is known plus
+  `missing` (one sentence). Cached per series in `<STATE_DIR>/context/tvmaze/` (`api/config.STATE_DIR`,
+  `SUBSTUDIO_STATE_DIR`).
 - `backend/core/translator.py` — `GeminiTranslator`, an optional backend of that contract: Gemini
   REST (`httpx`, no SDK), `thinkingLevel: low`, JSON output with a response schema, 30 cues per
   call, temperature 0.2. `get_context_profile()` builds a story bible from the filename.
