@@ -151,10 +151,12 @@ SRT = "1\n00:00:01,000 --> 00:00:02,500\nBonjour à tous.\n\n2\n00:00:03,000 -->
 
 class _Sub:
     """A listed subtitle as subliminal hands it over: language, provider, score, text once downloaded."""
-    def __init__(self, provider, score, ok=True, lang="fra", hash_match=False):
+    def __init__(self, provider, score, ok=True, lang="fra", hash_match=False, body=None):
         from babelfish import Language
         self.language, self.provider_name, self.score, self.ok = Language(lang), provider, score, ok
         self.text, self._hash = None, hash_match
+        # Each listed subtitle is a different file unless a test gives two the same body.
+        self.body = body or SRT + f"\n3\n00:00:05,000 --> 00:00:06,000\nNuméro {score}.\n"
 
     def get_matches(self, video):
         return {"hash"} if self._hash else {"series"}
@@ -180,7 +182,7 @@ class _FakePool:
     def download_subtitle(self, sub):
         self.downloaded.append(sub.score)
         if sub.ok:
-            sub.text = SRT
+            sub.text = sub.body
         return sub.ok
 
 
@@ -250,6 +252,23 @@ class Candidates(unittest.TestCase):
         pool = self._pool(_Sub("gestdown", 500))                            # under series+season+episode = 594
         r = _download(pool, lambda lang, d: None, per_language=3)
         self.assertEqual((pool.downloaded, r.subtitles, r.rejected), ([], {}, {}))
+
+    def test_a_copy_of_a_judged_candidate_is_skipped_without_using_a_try(self):
+        # S05E12 (2026-11-19): gestdown #1 and #3 were the same file; #3 cost a download and a re-timing for nothing.
+        crlf_copy = SRT.replace("\n", "\r\n").replace("Bonjour à tous.", "Bonjour  à\ntous.")
+        pool = self._pool(_Sub("gestdown", 700, body=SRT), _Sub("gestdown", 690, body=crlf_copy),
+                          _Sub("gestdown", 680), _Sub("gestdown", 670), _Sub("gestdown", 660))
+        seen = []
+        r = _download(pool, lambda lang, d: seen.append(os.path.basename(d.path)) or "out of sync", per_language=3)
+        self.assertEqual(seen, ["Show.S01E02.fr.1.srt", "Show.S01E02.fr.3.srt", "Show.S01E02.fr.4.srt"])
+        self.assertEqual(pool.downloaded, [700, 690, 680, 670])               # 3 tries, the copy not counted
+        self.assertEqual(len(r.rejected["fr"]), 3)
+
+    def test_copies_cannot_spend_more_than_twice_the_tries_in_downloads(self):
+        pool = self._pool(*[_Sub("gestdown", 700 - i, body=SRT) for i in range(9)])
+        r = _download(pool, lambda lang, d: "out of sync", per_language=3)
+        self.assertEqual(len(pool.downloaded), 6)
+        self.assertEqual(r.rejected["fr"], ["gestdown #1: out of sync"])
 
     def test_a_download_that_fails_is_noted_and_the_next_is_tried(self):
         pool = self._pool(_Sub("opensubtitlescom", 700, ok=False), _Sub("gestdown", 650))
