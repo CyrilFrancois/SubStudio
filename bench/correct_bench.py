@@ -1,9 +1,11 @@
 # correct_bench.py — measures rung 4's OV correction pass on a bench clip: WER and chrF against a human reference (a gate-passed track of the source episode, cut to the clip), and the gate, before and after. Exports: none (script).
 """
 Usage (backend venv, ffmpeg on PATH, the `heavy` lease held: it loads Whisper):
-    python -m bench.correct_bench <clip_dir> <source_video> [--track N]
+    python -m bench.correct_bench <clip_dir> <source_video> [--track N] [--min-logprob X]
 <clip_dir> holds clip.mkv + clip.json (start_s, duration_s, video_name); <source_video> is the full episode whose
 embedded text track N (default 0) passed the gate and serves as the reference, cut to the clip's window.
+--min-logprob lowers Whisper's own -1.0 doubt flag to exercise the re-hear path on a clip turbo is sure of; the
+report then says the flags were lowered, so the result is never read as the production setting's.
 Writes nothing beside the media: the reference is extracted to a temp folder.
 """
 import json
@@ -16,7 +18,7 @@ from pathlib import Path
 sys.path[:0] = [str(Path(__file__).resolve().parents[1] / "backend")]
 
 from core.context import get_context  # noqa: E402
-from core.correct import correct_ov, flagged_spans  # noqa: E402
+from core.correct import MIN_AVG_LOGPROB, correct_ov, flagged_spans  # noqa: E402
 from core.gate import THRESHOLDS, detect_speech, evaluate, read_audio  # noqa: E402
 from core.gate.speech import SAMPLE_RATE  # noqa: E402
 from core.subtitles import Cue, load_file  # noqa: E402
@@ -50,7 +52,7 @@ def reference(source_video: str, track: int, start_s: float, duration_s: float):
             if c.start_ms >= a and c.end_ms <= b]
 
 
-def main(clip_dir: str, source_video: str, track: int = 0) -> None:
+def main(clip_dir: str, source_video: str, track: int = 0, min_logprob: float = MIN_AVG_LOGPROB) -> None:
     meta = json.loads((Path(clip_dir) / "clip.json").read_text(encoding="utf-8"))
     clip = str(Path(clip_dir) / "clip.mkv")
     ref = reference(source_video, track, meta["start_s"], meta["duration_s"])
@@ -70,11 +72,12 @@ def main(clip_dir: str, source_video: str, track: int = 0) -> None:
 
     judge = lambda cues: evaluate(cues, speech, asr.language, duration_ms=dur_ms)
     t1 = time.time()
-    corrected, note = correct_ov(asr, rerun, glossary, judge, THRESHOLDS["max_cps"])
+    corrected, note = correct_ov(asr, rerun, glossary, judge, THRESHOLDS["max_cps"], min_logprob=min_logprob)
     t_fix = time.time() - t1
     first = asr.to_cues()
     report = {"clip": meta["id"], "model": asr.model, "ref_lines": len(ref),
-              "doubtful_spans": len(flagged_spans(asr, THRESHOLDS["max_cps"])), "rerun_s": round(t_fix, 1),
+              "doubtful_spans": len(flagged_spans(asr, THRESHOLDS["max_cps"], min_logprob)), "rerun_s": round(t_fix, 1),
+              "flags": "production" if min_logprob == MIN_AVG_LOGPROB else f"LOWERED for the bench: min_logprob {min_logprob}",
               "first_s": round(t_first, 1), "note": note}
     for name, cues in (("first", first), ("corrected", corrected)):
         v = judge(cues)
@@ -84,5 +87,11 @@ def main(clip_dir: str, source_video: str, track: int = 0) -> None:
 
 
 if __name__ == "__main__":
-    args = sys.argv[1:]
-    main(args[0], args[1], int(args[3]) if len(args) > 3 and args[2] == "--track" else 0)
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("clip_dir")
+    ap.add_argument("source_video")
+    ap.add_argument("--track", type=int, default=0)
+    ap.add_argument("--min-logprob", type=float, default=MIN_AVG_LOGPROB)
+    a = ap.parse_args()
+    main(a.clip_dir, a.source_video, a.track, a.min_logprob)

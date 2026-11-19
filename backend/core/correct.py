@@ -25,18 +25,19 @@ PAD_S = 0.3        # context around a doubtful segment, so the re-run hears whol
 MIN_NAME_RATIO = 0.84  # « Higgintoot » ← « Higginstoot » (0.95) yes; « Jay » ← « Day » never (names under 4 letters are left)
 
 
-def _doubtful(s: AsrSegment, max_cps: float) -> bool:
+def _doubtful(s: AsrSegment, max_cps: float, min_logprob: float) -> bool:
     chars = len(s.text.strip())
     cps = chars / max(s.end - s.start, 0.1)
-    return (s.avg_logprob < MIN_AVG_LOGPROB or s.compression_ratio > MAX_COMPRESSION
+    return (s.avg_logprob < min_logprob or s.compression_ratio > MAX_COMPRESSION
             or (s.no_speech_prob > MAX_NO_SPEECH and chars > 0) or cps > max_cps)
 
 
-def flagged_spans(asr: AsrResult, max_cps: float) -> List[Tuple[float, float]]:
-    """The doubtful segments as padded, merged spans in seconds, ready for transcribe(spans=...)."""
+def flagged_spans(asr: AsrResult, max_cps: float, min_logprob: float = MIN_AVG_LOGPROB) -> List[Tuple[float, float]]:
+    """The doubtful segments as padded, merged spans in seconds, ready for transcribe(spans=...). `min_logprob` is
+    Whisper's own -1.0; only a bench lowers it, to exercise the re-hear path, and says so in its report."""
     spans: List[Tuple[float, float]] = []
     for s in asr.segments:
-        if not _doubtful(s, max_cps):
+        if not _doubtful(s, max_cps, min_logprob):
             continue
         a, b = max(0.0, s.start - PAD_S), min(asr.duration or s.end + PAD_S, s.end + PAD_S)
         if spans and a <= spans[-1][1]:
@@ -70,25 +71,28 @@ def merge_rerun(asr: AsrResult, rerun: AsrResult, spans: Sequence[Tuple[float, f
 _WORD = re.compile(r"[^\W\d_][\w'’-]*", re.UNICODE)
 
 
-def fix_names(cues: List[Cue], glossary: Sequence[str]) -> Tuple[List[Cue], int]:
-    """Words that are a near miss of a glossary name (one word, 4+ letters) take its spelling. Text only."""
+def fix_names(cues: List[Cue], glossary: Sequence[str]) -> Tuple[List[Cue], List[Tuple[str, str]]]:
+    """Capitalised words that are a near miss of a glossary name (one word, 4+ letters, same initial) take its
+    spelling. Text only. Returns the cues and every change as (heard, written), so a run can show what it did.
+    Only capitalised words: Whisper capitalises what it heard as a name; a lower-case word is a common word, and
+    rewriting one into a name made the bench worse (S05E07, 2026-11-19: WER 9.69 % -> 10.03 %)."""
     names = {g.lower(): g for g in glossary if " " not in g and len(g) >= 4}
     if not names:
-        return cues, 0
-    fixed, out = 0, []
+        return cues, []
+    changes: List[Tuple[str, str]] = []
+    out = []
     for c in cues:
         def sub(m):
-            nonlocal fixed
             w = m.group(0)
-            if len(w) < 4 or w.lower() in names:
+            if len(w) < 4 or not w[0].isupper() or w.lower() in names:
                 return w
             best = difflib.get_close_matches(w.lower(), names, n=1, cutoff=MIN_NAME_RATIO)
             if best and best[0][0] == w.lower()[0]:
-                fixed += 1
+                changes.append((w, names[best[0]]))
                 return names[best[0]]
             return w
         out.append(replace(c, text=_WORD.sub(sub, c.text)))
-    return out, fixed
+    return out, changes
 
 
 def _failures(verdict) -> int:
@@ -96,19 +100,22 @@ def _failures(verdict) -> int:
 
 
 def correct_ov(asr: AsrResult, rerun: Optional[Callable[[List[Tuple[float, float]]], AsrResult]],
-               glossary: Sequence[str], judge: Callable[[List[Cue]], object], max_cps: float) -> Tuple[List[Cue], str]:
+               glossary: Sequence[str], judge: Callable[[List[Cue]], object], max_cps: float,
+               min_logprob: float = MIN_AVG_LOGPROB) -> Tuple[List[Cue], str]:
     """The better of the first transcript and its correction, by the gate (`judge` → Verdict): a passing one beats a
     failing one, then fewer failed checks; a tie keeps the correction. Returns the cues and one line saying what
     happened (for the log and the cell's attempts)."""
     first = asr.to_cues()
-    spans = flagged_spans(asr, max_cps) if rerun else []
+    spans = flagged_spans(asr, max_cps, min_logprob) if rerun else []
     merged, replaced = (merge_rerun(asr, rerun(spans), spans) if spans else (asr, 0))
-    corrected, renamed = fix_names(merged.to_cues(), glossary)
+    corrected, changes = fix_names(merged.to_cues(), glossary)
+    renamed = len(changes)
     if not replaced and not renamed:
         return first, f"correction: nothing to correct ({len(spans)} doubtful spans)"
     before, after = judge(first), judge(corrected)
     better = (after.passed, -_failures(after)) >= (before.passed, -_failures(before))
-    note = (f"correction: {replaced}/{len(spans)} doubtful spans re-transcribed, {renamed} names fixed; "
+    shown = f" ({', '.join(f'{a}->{b}' for a, b in changes[:8])})" if changes else ""
+    note = (f"correction: {replaced}/{len(spans)} doubtful spans re-transcribed, {renamed} names fixed{shown}; "
             f"gate {'passed' if before.passed else 'failed'} → {'passed' if after.passed else 'failed'}; "
             f"kept the {'corrected' if better else 'first'} transcript")
     logger.info(note)

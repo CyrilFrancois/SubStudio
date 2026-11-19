@@ -42,9 +42,16 @@ def test_a_rerun_replaces_a_span_only_when_more_confident():
 
 def test_names_take_the_glossary_spelling_text_only():
     cues = [Cue(1, 1000, 2500, "Higginstoot and Samanta are here."), Cue(2, 3000, 4000, "Jay says hi to Day.")]
-    out, n = fix_names(cues, ["Isaac Higgintoot", "Higgintoot", "Samantha", "Jay"])
+    out, changes = fix_names(cues, ["Isaac Higgintoot", "Higgintoot", "Samantha", "Jay"])
     assert [c.text for c in out] == ["Higgintoot and Samantha are here.", "Jay says hi to Day."]  # « Day » left alone
-    assert n == 2 and [(c.start_ms, c.end_ms) for c in out] == [(1000, 2500), (3000, 4000)]
+    assert changes == [("Higginstoot", "Higgintoot"), ("Samanta", "Samantha")]
+    assert [(c.start_ms, c.end_ms) for c in out] == [(1000, 2500), (3000, 4000)]
+
+
+def test_a_lower_case_word_is_never_turned_into_a_name():
+    # Whisper capitalises what it heard as a name; « samanta » in lower case is not one (the S05E07 bench lesson).
+    out, changes = fix_names([Cue(1, 0, 2000, "the samanta of it")], ["Samantha"])
+    assert out[0].text == "the samanta of it" and changes == []
 
 
 def _verdict(passed, failures=0):
@@ -76,5 +83,17 @@ def test_nothing_doubtful_means_no_rerun_and_the_first_transcript():
 
 def test_a_near_miss_with_another_first_letter_is_left_alone():
     # Close enough by ratio (0.86) but a different word may simply be meant: only same-initial misses are fixed.
-    out, n = fix_names([Cue(1, 0, 2000, "Elberta sings.")], ["Alberta"])
-    assert out[0].text == "Elberta sings." and n == 0
+    out, changes = fix_names([Cue(1, 0, 2000, "Elberta sings.")], ["Alberta"])
+    assert out[0].text == "Elberta sings." and changes == []
+
+
+def test_a_bench_can_lower_the_confidence_flag_to_exercise_the_rerun():
+    asr = result(seg(1, 3, "Good morning everyone.", logprob=-0.6))
+    assert flagged_spans(asr, max_cps=35) == []                       # Whisper's own -1.0: not doubtful
+    assert flagged_spans(asr, max_cps=35, min_logprob=-0.5) == [(0.7, 3.3)]
+
+
+def test_the_note_shows_which_names_changed():
+    asr = result(seg(1, 3, "Hello Samanta."))
+    _, note = correct_ov(asr, None, ["Samantha"], lambda c: _verdict(True), max_cps=35)
+    assert "1 names fixed (Samanta->Samantha)" in note
