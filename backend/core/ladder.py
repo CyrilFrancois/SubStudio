@@ -23,7 +23,7 @@ from .acquire.types import ExistingSub, Rung
 from .cells import CellState, Origin, Source, VideoRun, produce_cell
 from .gate import THRESHOLDS
 from .jobs import JobAborted
-from .subtitles import Cue, TranslationContext, Translator, detect_language, load_file, wrap_lines
+from .subtitles import Cue, TranslationContext, Translator, detect_language, ease_reading, load_file, wrap_lines
 
 logger = logging.getLogger("SubStudio.Ladder")
 
@@ -228,6 +228,12 @@ class Ladder:
             return False
         # Wrapped at the gate's own line limit: one number, so SubStudio's wrapping can never fail its own gate.
         cell.cues = wrap_lines(cell.cues, THRESHOLDS["max_line_chars"])
+        if cell.origin is not None and cell.origin.kind() in ("translated", "transcribed"):
+            # Lines SubStudio wrote (never a human track): a too-fast line keeps the pause after it, at the gate's own
+            # reading speed (core/subtitles/reading). Starts and ids never change.
+            await self._speech_ready()
+            cell.cues = ease_reading(cell.cues, THRESHOLDS["max_cps"],
+                                     audio_end_ms=self.run.speech[1] if self.run.speech else None)
         translated = source.language != cell.language
         # A transcript's times come from this very audio, and a translation keeps its source's times by id: so for an
         # ASR source, a sync the gate cannot measure (a short clip) is not a fault; for a human track it is.
