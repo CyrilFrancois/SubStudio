@@ -15,6 +15,9 @@ torch --index-url https://download.pytorch.org/whl/cpu
 
 # Media Processing
 langdetect
+# Subtitles: one typed cue list (any format) and legacy-charset detection
+pysubs2==1.9.1
+charset-normalizer==3.5.2
 ffmpeg-python
 
 # System & Utilities
