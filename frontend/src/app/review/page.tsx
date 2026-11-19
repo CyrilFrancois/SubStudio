@@ -56,6 +56,12 @@ function Review() {
     return () => window.removeEventListener('beforeunload', warn);
   }, [changed]);
 
+  // Stable, so CueTable's memoised rows skip rendering on every other line's keystroke.
+  const onEdit = useCallback((id: number, t: string) => {
+    setEdits(p => ({ ...p, [id]: t }));
+    setSave({ state: 'idle' });
+  }, []);
+
   const counts = useMemo(() => {
     const m = new Map<CueFlag, number>();
     list?.cues.forEach(c => (c.flags ?? []).forEach(f => m.set(f, (m.get(f) ?? 0) + 1)));
@@ -145,7 +151,7 @@ function Review() {
             {shown.length === 0
               ? <p className="px-6 py-10 text-sm text-gray-400 flex items-center gap-2"><CheckCircle2 size={15} className="text-emerald-400" aria-hidden /> No line needs a look.</p>
               : <CueTable cues={shown} edits={edits} selected={selected} onSelect={setSelected}
-                          onEdit={(id, t) => { setEdits(p => ({ ...p, [id]: t })); setSave({ state: 'idle' }); }}
+                          onEdit={onEdit}
                           sourceLabel={sourceLabel} />}
           </div>
           <aside className="min-h-0 overflow-y-auto p-4">
