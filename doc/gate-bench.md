@@ -54,7 +54,11 @@ spans): same verdicts, 17 / 17 and 128 / 128; numbers below are from that run, `
 | translation id set / untranslated | exact / ≤ 2 % | (no translation in this corpus) | by id, exactly; lines under 3 words exempt |
 
 Sound-only cues (« [laughs] », « (door closes) », « ♪ ») are excluded from the sync measures. Drift needs 20 dialogue
-cues per half; below that it is reported as not measured (None), not as 0.
+cues **and 40 speech spans** per half; below either it is reported as not measured (None), not as 0. The speech
+spans are what locate a half's offset: the 15 cached episodes hold 71–161 per half, while a 5-min clip whose
+dialogue barely pauses (S05E07 120–420 s, ~22 per half) let each half's offset land on noise, and Whisper's own
+transcript of it read « timing moves −53.5 s » (fixed 2026-11-19; a peak-sharpness guard was rejected because it
+also hid the seeded frame-rate faults). Re-run after the fix: same verdicts, 17 / 17 and 128 / 128.
 
 ## Limits of this proof
 
