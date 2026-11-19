@@ -224,6 +224,9 @@ export default function LibraryPage() {
           <div role="status" className={`flex items-center gap-2 text-sm min-w-0 ${notice.tone === 'ok' ? 'text-emerald-300' : 'text-red-300'}`}>
             {notice.tone === 'ok' ? <CheckCircle2 size={16} aria-hidden /> : <AlertCircle size={16} aria-hidden />}
             <span className="truncate" title={notice.text}>{notice.text}</span>
+            {notice.tone === 'ok' && (
+              <Link href="/queue" className="shrink-0 underline underline-offset-2 hover:text-emerald-200">Open the Queue</Link>
+            )}
             <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss" title="Dismiss" className="text-gray-500 hover:text-gray-300">
               <X size={14} />
             </button>

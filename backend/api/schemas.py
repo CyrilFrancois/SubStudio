@@ -113,6 +113,7 @@ class Job(BaseModel):
     video_name: str
     languages: List[LanguageCode]
     state: JobState
+    batch_id: Optional[str] = Field(None, description="Same for every job one POST /api/jobs created: the Queue's overall bar counts them together.")
     position: Optional[int] = Field(None, description="Place in the queue (0 = next); null once started.")
     stages: List[StageProgress]
     created_at: datetime

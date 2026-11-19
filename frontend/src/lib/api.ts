@@ -1,6 +1,6 @@
 // api.ts — REST client for the UI contract (backend/api). Every failure throws ApiError with the backend's sentence. Exports: API_BASE_URL, ApiError, api.
 import type {
-  Job, JobCreate, JobCreateResponse, JobList, LibraryResponse, Settings, SettingsResponse, SystemStatus,
+  Job, JobCreate, JobCreateResponse, JobList, LibraryResponse, LogEvent, Settings, SettingsResponse, SystemStatus,
 } from './types';
 
 // `||` and not `??`: a defined-but-empty NEXT_PUBLIC_API_URL must fall back too.
@@ -40,6 +40,7 @@ export const api = {
   createJobs: (req: JobCreate) => request<JobCreateResponse>('POST', '/api/jobs', req),
   jobs: () => request<JobList>('GET', '/api/jobs'),
   cancelJob: (id: string) => request<Job>('DELETE', `/api/jobs/${encodeURIComponent(id)}`),
+  jobLogs: (id: string, limit = 500) => request<LogEvent[]>('GET', `/api/jobs/${encodeURIComponent(id)}/logs?limit=${limit}`),
   settings: () => request<SettingsResponse>('GET', '/api/settings'),
   saveSettings: (s: Settings) => request<SettingsResponse>('PUT', '/api/settings', s),
   system: () => request<SystemStatus>('GET', '/api/system'),

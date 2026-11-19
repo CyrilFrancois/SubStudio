@@ -30,6 +30,7 @@ class StubJobs:
     def create(self, req: JobCreate, library: Optional[LibraryResponse]) -> JobCreateResponse:
         videos = {v.id: v for v in (library.videos if library else [])}
         created, skipped = [], []
+        batch = f"stub-batch-{next(self._ids)}"
         for vid in req.video_ids:
             v = videos.get(vid)
             if v is None:
@@ -42,7 +43,7 @@ class StubJobs:
                 skipped.append(vid)
                 continue
             job = Job(id=f"stub-{next(self._ids)}", video_id=vid, video_name=v.name, languages=langs,
-                      state="queued", stages=[StageProgress(stage=s, state="pending") for s in STAGES],
+                      state="queued", batch_id=batch, stages=[StageProgress(stage=s, state="pending") for s in STAGES],
                       created_at=_now())
             self.jobs[job.id] = job
             created.append(job)

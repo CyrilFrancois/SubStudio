@@ -200,6 +200,11 @@ export interface components {
         /** Job */
         Job: {
             /**
+             * Batch Id
+             * @description Same for every job one POST /api/jobs created: the Queue's overall bar counts them together.
+             */
+            batch_id?: string | null;
+            /**
              * Created At
              * Format: date-time
              */
