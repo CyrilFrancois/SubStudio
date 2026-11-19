@@ -10,6 +10,7 @@ node_modules/
 .next/
 
 # Python
+.venv/
 __pycache__/
 *.py[cod]
 
@@ -19,6 +20,11 @@ __pycache__/
 # Local archive of pre-harness files (may hold runbooks)
 _archive/
 
-# UI API state (settings.json) and native venvs
-backend/state/
+# Local venv, test cache, bench clips and the local manifest naming real media
 .venv/
+.pytest_cache/
+bench/clips/
+bench/clips.local.json
+
+# UI API state (settings.json)
+backend/state/
