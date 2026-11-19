@@ -150,13 +150,21 @@ def produce_cell(cell: Cell, source: Source, translator: Translator,
         return
     rung = Rung.ASR if source.rung == Rung.ASR else Rung.TRANSLATE
     cell.origin = Origin(rung, source.language)
+    left: Dict[int, str] = {}
     key = cache.lines_key(source.cues, cell.language, translator.name, source.context) if cache else None
     try:
+        # One cue the model keeps answering wrongly no longer costs the language: it stays in the source language,
+        # is named here, and the gate's « untranslated » check judges the whole cell (core/subtitles/translate.py).
         cell.cues = translate_cues(source.cues, cell.language, source.context, translator,
-                                   on_batch=on_batch, check_abort=check_abort,
+                                   on_batch=on_batch, check_abort=check_abort, left_in_source=left,
                                    known=cache.load_lines(key) if cache else None,
                                    on_texts=(lambda texts: cache.save_lines(key, texts)) if cache else None)
     except TranslationFailed as e:
         cell.state, cell.reason = CellState.FAILED, str(e)
         return
+    if left:
+        ids = sorted(left)
+        cell.attempts.append(f"translate: {len(ids)} line{'s' if len(ids) > 1 else ''} left in "
+                             f"{source.language or 'the source language'} (cue{'s' if len(ids) > 1 else ''} "
+                             f"{', '.join(map(str, ids[:10]))}): {left[ids[0]][:120]}")
     cell.state = CellState.PASSED

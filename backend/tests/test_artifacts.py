@@ -98,7 +98,8 @@ def test_produce_cell_resumes_from_the_cache(tmp_path):
     source = Source(cues=cues(), rung=Rung.EXISTING, language="en", context=TranslationContext(source_lang="en"))
     cell = Cell("fr")
     produce_cell(cell, source, Model(refuse={12}), cache=cache)
-    assert cell.state == CellState.FAILED and "cue 12" in cell.reason
+    # One refused cue stays English and is named (fix/translator-replies); it is never cached as validated.
+    assert cell.state == CellState.PASSED and "(cue 12)" in cell.attempts[-1]
     again, model = Cell("fr"), Model()
     produce_cell(again, source, model, cache=cache)
     assert again.state == CellState.PASSED and model.sent == [[12]]
