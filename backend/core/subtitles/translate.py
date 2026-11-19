@@ -121,6 +121,8 @@ def translate_cues(
     check_abort: Optional[Callable[[], None]] = None,
     call_retries: int = 2,
     retry_delay_s: float = 2.0,
+    known: Optional[Dict[int, str]] = None,
+    on_texts: Optional[Callable[[Dict[int, str]], None]] = None,
 ) -> List[Cue]:
     """
     Translates every cue into `target`; returns new cues with the SAME ids and timings.
@@ -128,6 +130,8 @@ def translate_cues(
     A call that raises is retried `call_retries` times, then the language fails.
     An answer whose id set is wrong is retried once, then the batch is split in halves down to one cue;
     a single cue still answered wrongly fails the language.
+    known ({id: text}, from core/artifacts) are lines already translated and validated by an earlier run: only the
+    others are sent. on_texts(all validated so far) runs after every batch, so a failure keeps what was done.
     """
     if not cues:
         raise TranslationFailed(f"{target}: nothing to translate (0 cues)")
@@ -135,8 +139,10 @@ def translate_cues(
     by_id = {c.id: c for c in cues}
     if len(by_id) != len(cues):
         raise TranslationFailed(f"{target}: duplicate cue ids in the source")
-    texts: Dict[int, str] = {}
-    done = 0
+    texts: Dict[int, str] = {i: t for i, t in (known or {}).items() if i in by_id and t}
+    done = len(texts)
+    if done and on_batch:
+        on_batch(done, len(cues))
 
     position = {c.id: i for i, c in enumerate(cues)}
     # Translating into the source language legitimately returns the same text.
@@ -182,11 +188,14 @@ def translate_cues(
             run(batch[half:])
             return
         done += len(batch)
+        if on_texts:
+            on_texts(dict(texts))
         if on_batch:
             on_batch(done, len(cues))
 
-    for i in range(0, len(cues), size):
-        run(cues[i:i + size])
+    todo = [c for c in cues if c.id not in texts]
+    for i in range(0, len(todo), size):
+        run(todo[i:i + size])
 
     if check_echo:
         long_lines = [c for c in cues if _is_sentence(c.text)]
