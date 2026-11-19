@@ -20,10 +20,11 @@ in `SubStudio/CLAUDE.md` or `SubStudio/.claude/rules/*.md`. Map: `doc/harness-mi
 #   full suite x3 : $T with heavy --min-free-mb 1500 -- .venv/Scripts/python.exe -m pytest -q
 #   next build    : $T with heavy --min-free-mb 1500 -- npx next build
 #   Whisper turbo : --min-free-mb 2500 (measured 1.9 GB peak on a 5-min clip, bench/README.md, 2026-11-19)   TranslateGemma 4B : --min-free-mb 4000 (D-0003: 3.9 GB peak)
-# A single test file and tsc stay free. Never pipe the `with` command: its refusal must stop the chain.
+#   whole-project tsc : $T with heavy -- npx tsc --noEmit (STEWARD to the UI thread, 2026-11-19: 1.1 GB free seen)
+# A single test file stays free. Never pipe the `with` command: its refusal must stop the chain.
 
 # Frontend — natively (Node at C:\Users\cyril\tools\node, 2026-11-19), from frontend/
-npx tsc --noEmit
+npx tsc --noEmit          # whole project: heavy lease, above
 npx next build            # NEXT_PUBLIC_API_URL is baked in here, not read at run time (heavy lease, above)
 npm run check:types       # fails when src/lib/api.gen.ts no longer matches backend/api (npm run gen:types)
 
