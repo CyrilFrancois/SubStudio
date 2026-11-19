@@ -104,7 +104,7 @@ def test_each_language_gets_its_own_verdict_and_origin(clip):
                            "origin_label": "kept", "rung": "existing", "reason": "", "attempts": []}
     assert cells["de"]["state"] == "passed" and cells["de"]["origin_label"] == "translated from en"
     assert (cells["de"]["origin"], cells["de"]["from_language"]) == ("translated", "en")
-    assert cells["fr"]["state"] == "failed" and cells["fr"]["reason"].startswith("fr: tag cannot translate cue")
+    assert cells["fr"]["state"] == "failed" and cells["fr"]["reason"].startswith("fr: tag left 4 of 4 cues untranslated")
     assert orch.translator.calls.count("en") == 0          # already English: kept, never sent to a model
     assert [c["state"] for c in seen[0]] == ["pending"] * 3 and seen[-1] == list(cells.values())
     status = event_manager.state_cache[str(clip)]
@@ -149,6 +149,24 @@ def test_a_transcribed_source_in_the_wanted_language_is_transcribed_not_translat
     produce_cell(other, source, Tag())
     assert (same.state, same.origin.label()) == (CellState.PASSED, "transcribed")
     assert other.origin == Origin(Rung.ASR, "en") and other.origin.label() == "transcribed, translated from en"
+
+
+def test_one_cue_the_model_never_answers_no_longer_costs_the_language():
+    # Ghosts S05E12 FR (2026-11-19): one cue of 513 used to fail the cell. Now it stays English, named on the cell,
+    # and the gate's « untranslated » check judges the whole cell (core/gate/verdict.py).
+    # 12 cues: one left is under translate.MAX_ECHO_SHARE (10 %); more would fail the language by name.
+    cues = [Cue(id=i + 1, start_ms=i * 1000, end_ms=i * 1000 + 900, text=ENGLISH[i % 4]) for i in range(12)]
+    source = Source(cues=cues, rung=Rung.EXISTING, language="en", context=TranslationContext(source_lang="en"))
+
+    class SkipsCue3(Tag):
+        def translate(self, cues, target, context):
+            return [c for c in super().translate(cues, target, context) if c["id"] != 3]
+
+    cell = Cell("fr")
+    produce_cell(cell, source, SkipsCue3())
+    assert cell.state == CellState.PASSED and [c.text for c in cell.cues][2] == ENGLISH[2]
+    assert [c.text for c in cell.cues][0] == f"[fr] {ENGLISH[0]}"
+    assert cell.attempts == ["translate: 1 line left in en (cue 3): missing ids [3], unexpected ids []"]
 
 
 def test_too_little_text_has_no_detected_language():

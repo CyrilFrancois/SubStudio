@@ -108,13 +108,77 @@ def test_reply_cut_at_the_token_limit_is_a_wrong_answer():
 
 
 @pytest.mark.parametrize("reply, why", [
-    ("1|un\nSure, here is the translation", "unnumbered"),
+    ("Sure, here is the translation\n1|un\n2|deux", "unnumbered"),
     ("1|un\n1|encore", "twice"),
+    ("272\xa0? Une chambre\xa0?\n273|deux", "unnumbered"),  # S05E12: « ? » is not where a translation starts
+    ("1|un\n2|deux\nSure, here is the translation.", "after the last answer"),  # never glued onto cue 2
 ])
 def test_chatter_or_duplicates_are_rejected(reply, why):
     t, _ = translator(lambda p: (reply, "eos"))
     with pytest.raises(BatchMismatch, match=why):
-        t.translate([{"id": 1, "text": "one"}], "fr", CTX)
+        t.translate([{"id": 1, "text": "one"}, {"id": 2, "text": "two"}], "fr", CTX)
+
+
+# Reply shapes TranslateGemma produced on Ghosts S05E12 FR (backend log, 2026-11-19), each one a split batch then.
+@pytest.mark.parametrize("reply, expected", [
+    ("68|Je vais bien.\n69/afin que je me sente mieux ?", {68: "Je vais bien.", 69: "afin que je me sente mieux ?"}),
+    ("199|Il faut ouvrir\n200 le contenu, puis de remettre la boîte à sa place.",
+     {199: "Il faut ouvrir", 200: "le contenu, puis de remettre la boîte à sa place."}),
+    ("12\xa0: Bonjour.\n13\u202f| Salut.", {12: "Bonjour.", 13: "Salut."}),
+    ("40|On l'a caché\ndans le bunker.\n41|Oui.", {40: "On l'a caché dans le bunker.", 41: "Oui."}),
+    ("7|Bon,\n\xa0à propos de cela, j'ai écrit.\n8|Ok.", {7: "Bon, à propos de cela, j'ai écrit.", 8: "Ok."}),
+])
+def test_reply_shapes_seen_live_are_read_by_id(reply, expected):
+    t, _ = translator(lambda p: (reply, "eos"))
+    sent = [{"id": i, "text": "x"} for i in expected]
+    assert {c["id"]: c["text"] for c in t.translate(sent, "fr", CTX)} == expected
+
+
+def test_a_line_that_was_really_the_next_cue_never_ships_under_a_valid_id_set():
+    # Between two answers, « dans le bunker. » joins the cue before; then cue 41 is missing and translate_cues
+    # rejects the batch. After the last answer it is rejected at once: a continuation is never guessed there.
+    t, _ = translator(lambda p: ("40|On l'a caché\ndans le bunker.\n42|Oui.", "eos"))
+    sent = [{"id": i, "text": "x"} for i in (40, 41, 42)]
+    assert [c["id"] for c in t.translate(sent, "fr", CTX)] == [40, 42]
+    t, _ = translator(lambda p: ("40|On l'a caché\ndans le bunker.", "eos"))
+    with pytest.raises(BatchMismatch, match="after the last answer"):
+        t.translate(sent[:2], "fr", CTX)
+
+
+def test_one_cue_is_sent_as_plain_text_and_its_answer_needs_no_id():
+    t, fake = translator(lambda p: ("Une chambre\xa0?", "eos"))
+    assert t.translate([{"id": 272, "text": "A room?"}], "fr", CTX) == [{"id": 272, "text": "Une chambre\xa0?"}]
+    assert lines_of(fake.prompts[0]) == ["A room?"]
+    t, _ = translator(lambda p: ("272|Une chambre ?", "eos"))  # an id the model adds anyway is dropped
+    assert t.translate([{"id": 272, "text": "A room?"}], "fr", CTX) == [{"id": 272, "text": "Une chambre ?"}]
+    t, _ = translator(lambda p: ("3 hommes sont venus.", "eos"))  # a translation starting with its own number
+    assert t.translate([{"id": 3, "text": "3 men came."}], "fr", CTX) == [{"id": 3, "text": "3 hommes sont venus."}]
+
+
+@pytest.mark.parametrize("reply", [
+    "272\xa0? Une chambre\xa0?",                     # the S05E12 shape, alone: still not a translation
+    "Here is the translation:\nUne chambre ?",       # chatter before
+    "Une chambre ?\nI kept the meaning.",            # chatter after
+    "",
+])
+def test_a_one_cue_answer_that_is_not_just_the_translation_is_a_wrong_answer(reply):
+    t, _ = translator(lambda p: (reply, "eos"))
+    with pytest.raises(BatchMismatch):
+        t.translate([{"id": 272, "text": "A room?"}], "fr", CTX)
+
+
+def test_the_s05e12_cue_that_failed_a_whole_language_now_translates():
+    # In a batch the model answers cue 272 as « 272\xa0? Une chambre\xa0? »; alone, as plain text, it answers well.
+    def model(prompt):
+        ls = lines_of(prompt)
+        if len(ls) == 1 and "|" not in ls[0]:
+            return ("Une chambre ?" if ls[0] == "A room?" else f"[fr] {ls[0]}"), "eos"
+        return "\n".join("272\xa0? Une chambre\xa0?" if l.startswith("272|") else f"{l.split('|')[0]}|[fr] {l}"
+                         for l in ls), "eos"
+    cues = [Cue(id=i, start_ms=i * 1000, end_ms=i * 1000 + 900, text="A room?" if i == 272 else f"line {i}")
+            for i in range(265, 281)]
+    out = translate_cues(cues, "fr", CTX, translator(model)[0], retry_delay_s=0)
+    assert {c.id: c.text for c in out}[272] == "Une chambre ?" and len(out) == 16
 
 
 def test_unknown_source_language_fails_the_language_loudly_not_silently():

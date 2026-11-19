@@ -156,7 +156,10 @@ and lost on restart.
   clips, wraps and writes SRT; nothing else parses or prints a timestamp. `translate.py` holds the
   `Translator` contract (`translate([{id, text}], target, context) -> [{id, text}]`, no timing ever
   sent) and `translate_cues`, which batches, rejects an answer whose id set differs (retry once,
-  then split down to one cue), re-attaches timings by id, and raises `TranslationFailed`.
+  then split down to one cue), re-attaches timings by id, and raises `TranslationFailed`. A cue still wrong
+  ALONE stays in the source language, recorded in `left_in_source` and on the cell's `attempts` (`produce_cell`
+  passes it); over 10 % of the cues left (`MAX_ECHO_SHARE`) fails the language, and the gate's « untranslated »
+  check names the cues.
 - `backend/core/cells.py` — one `Cell` per video × language: `pending → running → passed | failed`, an
   `Origin` (`kept`, `downloaded`, `translated from en`, `transcribed`) or a one-sentence reason. A source already
   in the wanted language (detected) is kept, never translated. `VideoRun` keeps the source and every cell's cues
@@ -171,7 +174,11 @@ and lost on restart.
   `gemini` opt-in). `llamacpp.py` —
   `LlamaCppTranslator`, the default: TranslateGemma 4B Q4_K_M on a native llama.cpp server, 10 cues per
   call as `id|text` lines, prompt rendered from the model's own chat template (`/props`), a reply cut at
-  the token limit raises `BatchMismatch`. `llama_server.py` starts the server on the first batch
+  the token limit raises `BatchMismatch`. The reply parser reads the id with any separator or plain whitespace
+  (NBSP included) and joins an unnumbered line BETWEEN two answers to the one before (chatter before the first or
+  after the last is rejected); the id set check catches a merged cue. A
+  batch of ONE cue is sent as plain text with no id and must come back as the translation alone (one line, or one per
+  speaker), so the last step of a split never fails on the format; anything else is kept in the source language. `llama_server.py` starts the server on the first batch
   (`--threads 4`, all layers on the iGPU) and `unload()` (part of the contract) stops it after each video's
   translations, under a lock shared by batches and retries, so Whisper and the LLM are never loaded together
   (D-0001). The source language comes from `detect_language` or Whisper; unknown, the cell fails at once.
