@@ -48,12 +48,16 @@ correct fix that makes the workflow worse is still wrong.
 - **Phase:** build, active since 2026-11-18 (paused 2026-08-21 to 2026-11-18). Local only: no hosted deployment.
 - **Test corpus (Cyril, 2026-11-19): `C:\Videos` is the media test folder.** Today: `C:\Videos\Ghosts\Saison 5\`,
   22 MKV episodes of Ghosts (2021) S05E01–E22, 14 GB, 720p/1080p, H.264/HEVC, English audio. Every video there is
-  to be subtitled, and **is treated as having no subtitles**: 15 carry tracks made by an older SubStudio, which are
-  not good and carry no marker telling them from release tracks.
-- **Every pre-existing subtitle is untrusted by default,** embedded tracks AND sidecars (the old SubStudio wrote
-  `{stem}.{lang}.srt` by default). The setting `count_existing` (« Count subtitles not made by this SubStudio ») is
-  OFF by default: such a subtitle then never counts as coverage, never makes the planner skip a language, and is
-  never used as a scoring reference; the UI shows the language as missing with « ignored: <lang> <embedded|sidecar> ».
+  to be subtitled. **15 carry an « English (SDH) » track that looks like real release captions** (Cyril, 2026-11-19,
+  reversing the earlier « made by an older SubStudio, not good »): the bench checks their timing against the audio
+  first; **in sync, they are English references and the quality gate must ACCEPT them** (rung 1: file left as is for
+  English).
+- **Every pre-existing subtitle is evaluated, never trusted blindly,** embedded tracks AND sidecars (the old SubStudio
+  wrote `{stem}.{lang}.srt` by default): the quality gate (`doc/user-process.md` §3) decides. Until the gate exists in
+  code, the setting `count_existing` (« Count subtitles not made by this SubStudio ») stays OFF by default: such a
+  subtitle then never counts as coverage, never makes the planner skip a language; the UI shows the language as
+  missing with « ignored: <lang> <embedded|sidecar> ». The bench may still use a track as a reference once its timing
+  is checked against the audio.
   What the new SubStudio writes is recognised by ONE rule, `backend/core/provenance.py` (muxed track title
   « SubStudio {lang} », sidecars listed in the per-video manifest), and does count.
 - **Forbidden:** `cleanUp=true`, or deleting or overwriting any source video by any path other than the **verified
