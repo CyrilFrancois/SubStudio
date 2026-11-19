@@ -26,7 +26,7 @@ def stage_of(status: str, pct: int) -> Optional[Tuple[str, float]]:
         return "translate", max(0.0, min(1.0, (pct - 40) / 40))
     if status == "processing":
         if pct >= 90:
-            return "write", 0.0
+            return "write", max(0.0, min(1.0, (pct - 90) / 10))   # 90 starting, 100 written (pipeline step 5)
         if pct >= 15:
             return "transcribe", 0.0          # ladder rung 4 starts: « Transcribing with Whisper... »
         if pct >= 12:
