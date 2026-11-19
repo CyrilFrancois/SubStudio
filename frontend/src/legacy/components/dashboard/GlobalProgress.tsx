@@ -2,11 +2,11 @@
 "use client";
 
 import React, { useEffect, useRef, useMemo } from 'react';
-import { useStudio } from '@/lib/studio-context';
+import { useStudio } from '@/legacy/lib/studio-context';
 import { Activity, Terminal, ChevronRight, Cpu, Zap, CheckCircle2, PartyPopper } from 'lucide-react';
-import { VideoFile } from '@/lib/types';
+import { LogLine, VideoFile } from '@/legacy/lib/types';
 
-function LogTerminal({ logs }: { logs: string[] }) {
+function LogTerminal({ logs }: { logs: LogLine[] }) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -25,14 +25,14 @@ function LogTerminal({ logs }: { logs: string[] }) {
     >
       {logs.length > 0 ? (
         logs.map((log, i) => {
-          const isError = /error|failed|exception/i.test(log);
-          const isWarning = /warning|low memory/i.test(log);
-          const isSuccess = /success|completed|done/i.test(log);
+          const isError = /error|failed|exception/i.test(log.text);
+          const isWarning = /warning|low memory/i.test(log.text);
+          const isSuccess = /success|completed|done/i.test(log.text);
           
           return (
             <div key={i} className="flex gap-3 mb-1 animate-in fade-in slide-in-from-left-1 duration-300">
               <span className="text-gray-700 shrink-0 select-none">
-                [{new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}]
+                [{new Date(log.at).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}]
               </span>
               <span className={
                 isError ? 'text-red-400' : 
@@ -41,7 +41,7 @@ function LogTerminal({ logs }: { logs: string[] }) {
                 'text-gray-300'
               }>
                 <span className="text-indigo-500/50 mr-2">›</span>
-                {log}
+                {log.text}
               </span>
             </div>
           );
@@ -49,7 +49,7 @@ function LogTerminal({ logs }: { logs: string[] }) {
       ) : (
         <div className="flex flex-col items-center justify-center h-full text-gray-700 gap-3">
           <Cpu size={24} className="opacity-20" />
-          <span className="text-[10px] uppercase tracking-[0.3em] font-bold">System Standby — Awaiting Input (NOT WORKING, SEE YOUR BACKEND LOG)</span>
+          <span className="text-[10px] uppercase tracking-[0.3em] font-bold">No log lines yet for this job</span>
         </div>
       )}
     </div>

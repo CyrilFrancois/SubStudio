@@ -1,313 +1,245 @@
-// page.tsx — Studio dashboard root: owns StudioState, SSE subscriptions and batch dispatch. Exports: default DashboardPage.
+// page.tsx — Library (home): which of my videos lack which language; select, then Start (D-0002). Exports: default LibraryPage.
 "use client";
 
-import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import Sidebar from '@/components/layout/Sidebar';
-import GlobalProgress from '@/components/dashboard/GlobalProgress';
-import VideoList from '@/components/dashboard/VideoList';
-import { api } from '@/lib/api';
-import { VideoFile, GlobalSettings, StudioState, ProcessingStatus } from '@/lib/types';
-import { StudioContext, useStudio } from '@/lib/studio-context';
-import { createSSEConnection, SSEEvent } from '@/lib/sse';
-import { Terminal, Bug, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
+import { AlertCircle, CheckCircle2, Loader2, Play, RefreshCw, Search, X } from 'lucide-react';
+import { api, ApiError } from '@/lib/api';
+import { useJobEvents } from '@/lib/events';
+import { languageName } from '@/lib/languages';
+import type { Job, JobOptions, LanguageCoverage, LibraryResponse } from '@/lib/types';
+import LibraryTable, { Row } from '@/components/library/LibraryTable';
+import { hasOverrides } from '@/components/library/VideoDetails';
 
-const TERMINAL_LOG_LIMIT = 400;
+type Notice = { tone: 'ok' | 'error'; text: string } | null;
 
-// --- DEBUGGER ---
-function AppStatusDebugger() {
-  const { state } = useStudio();
-  const [isVisible, setIsVisible] = useState(false);
+/** Live job states win over the last scan for cells that have not passed. */
+function overlay(cov: LanguageCoverage[], videoId: string, jobs: Job[]): LanguageCoverage[] {
+  return cov.map(c => {
+    if (c.state === 'passed') return c;
+    const job = jobs
+      .filter(j => j.video_id === videoId && j.languages.includes(c.language))
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
+    if (!job || !['queued', 'running', 'failed'].includes(job.state)) return c;
+    const state: LanguageCoverage['state'] = job.state === 'queued' ? 'pending' : job.state === 'running' ? 'running' : 'failed';
+    return { ...c, state, job_id: job.id, reason: job.error ?? c.reason };
+  });
+}
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.shiftKey && e.key === 'D') setIsVisible(v => !v);
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+export default function LibraryPage() {
+  const [lib, setLib] = useState<LibraryResponse | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [overrides, setOverrides] = useState<Record<string, JobOptions>>({});
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState('all');
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<Notice>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      setLib(await api.library());
+      setLoadError(null);
+    } catch (e) {
+      // Keep the last good table on screen, but say loudly that it is not fresh.
+      setLoadError((e as ApiError).message);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  if (!isVisible) return (
-    <button
-      onClick={() => setIsVisible(true)}
-      aria-label="Open debug panel"
-      title="Open debug panel (Ctrl+Shift+D)"
-      className="fixed bottom-2 right-2 w-6 h-6 opacity-20 hover:opacity-100 z-[9999] flex items-center justify-center text-white bg-white/10 rounded-full transition-all"
-    >
-      <Bug size={12} />
-    </button>
-  );
+  useEffect(() => { load(); }, [load]);
+  const { jobs } = useJobEvents(load);
+  const jobList = useMemo(() => Object.values(jobs), [jobs]);
 
-  return (
-    <div className="fixed inset-y-0 right-0 w-full max-w-[500px] bg-[#050505] border-l border-white/10 z-[10000] shadow-2xl flex flex-col">
-      <div className="p-4 border-b border-white/10 flex justify-between items-center bg-white/[0.02]">
-        <div className="flex items-center gap-2 text-indigo-400 font-mono text-[10px] font-bold tracking-widest">
-          <Terminal size={14} /> SYSTEM_DEBUG_STDOUT
-        </div>
-        <button onClick={() => setIsVisible(false)} aria-label="Close debug panel" title="Close" className="text-gray-500 hover:text-white p-1">
-          <X size={18} />
-        </button>
-      </div>
-      <div className="flex-1 overflow-auto p-6 custom-scrollbar">
-        <pre className="text-[10px] font-mono text-emerald-500/90 whitespace-pre-wrap">
-          {JSON.stringify(state, (k, v) => v instanceof Set ? Array.from(v) : v, 2)}
-        </pre>
-      </div>
-    </div>
-  );
-}
+  const rows: Row[] = useMemo(() => (lib?.videos ?? []).map(v => ({
+    video: v, coverage: overlay(v.coverage, v.id, jobList),
+  })), [lib, jobList]);
 
-// --- DASHBOARD LAYOUT ---
-function DashboardContent() {
-  const { state } = useStudio();
-  return (
-    <div className="flex h-screen w-full bg-[#0a0a0a] text-slate-200 overflow-hidden">
-      <Sidebar />
-      <main className="flex-1 relative flex flex-col overflow-hidden">
-        <GlobalProgress />
-        <div className="flex-1 overflow-y-auto custom-scrollbar p-6">
-          <VideoList videos={state.items} />
-        </div>
-      </main>
-      <AppStatusDebugger />
-    </div>
-  );
-}
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return rows.filter(({ video, coverage }) => {
+      if (q && !`${video.folder}/${video.name}`.toLowerCase().includes(q)) return false;
+      if (filter === 'todo') return !video.validated;
+      if (filter.startsWith('missing:')) return coverage.some(c => c.language === filter.slice(8) && c.state === 'missing');
+      if (filter === 'failed') return coverage.some(c => c.state === 'failed' || c.state === 'unknown');
+      if (filter === 'active') return coverage.some(c => c.state === 'pending' || c.state === 'running');
+      return true;
+    });
+  }, [rows, query, filter]);
 
-// --- ROOT PAGE ---
-export default function DashboardPage() {
-  const [mounted, setMounted] = useState(false);
-  const activeListeners = useRef<Record<string, EventSource>>({});
-  const hasInitialScanned = useRef(false);
-  const scanInFlight = useRef(false);
+  const groups = useMemo(() => {
+    const m = new Map<string, Row[]>();
+    for (const r of visible) m.set(r.video.folder, [...(m.get(r.video.folder) ?? []), r]);
+    return Array.from(m.entries());
+  }, [visible]);
 
-  const [state, setState] = useState<StudioState>({
-    items: [],
-    selectedIds: new Set(),
-    logs: {},
-    isScanning: false,
-    currentPath: "/data",
-    settings: {
-      sourceLang: ['auto'],
-      targetLanguages: ['fr'],
-      workflowMode: 'whisper',
-      modelSize: 'medium',
-      autoGenerate: true,
-      shouldMux: true,
-      shouldRemoveOriginal: false,
-      stripExistingSubs: false
-    }
+  const select = (ids: string[], on: boolean) => setSelected(prev => {
+    const next = new Set(prev);
+    ids.forEach(id => (on ? next.add(id) : next.delete(id)));
+    return next;
   });
 
-  // 1. RECURSIVE UPDATE HELPER
-  const updateVideoInList = useCallback((id: string, updates: Partial<VideoFile>) => {
-    setState(prev => {
-      const updateRecursive = (list: VideoFile[]): VideoFile[] => {
-        return list.map(item => {
-          if (item.id === id || item.filePath === id) return { ...item, ...updates };
-          if (item.children) return { ...item, children: updateRecursive(item.children) };
-          return item;
-        });
-      };
-      return { ...prev, items: updateRecursive(prev.items) };
-    });
-  }, []);
-
-  const appendLog = useCallback((fileId: string, line: string) => {
-    setState(prev => {
-      const next = [...(prev.logs[fileId] || []), line];
-      return {
-        ...prev,
-        logs: {
-          ...prev.logs,
-          [fileId]: next.length > TERMINAL_LOG_LIMIT ? next.slice(-TERMINAL_LOG_LIMIT) : next
-        }
-      };
-    });
-  }, []);
-
-  // 2. STABLE SCAN ACTION
-  const performScan = useCallback(async (path: string) => {
-    // Guard lives in a ref, not in state: a setState updater runs when React processes the
-    // update, not at the call site, so reading the flag back from it races. Keeping it out of
-    // state also keeps this callback's identity stable, so the mount effect fires once.
-    if (scanInFlight.current) return;
-    scanInFlight.current = true;
-    setState(prev => ({ ...prev, isScanning: true }));
-
+  const start = async (ids: string[]) => {
+    if (ids.length === 0) return;
+    setBusy(true);
+    setNotice(null);
+    // One request per distinct set of overrides: videos without overrides travel together.
+    const plain = ids.filter(id => !hasOverrides(overrides[id]));
+    const batches: [string[], JobOptions | undefined][] = [
+      ...(plain.length ? [[plain, undefined] as [string[], undefined]] : []),
+      ...ids.filter(id => hasOverrides(overrides[id])).map(id => [[id], overrides[id]] as [string[], JobOptions]),
+    ];
+    let created = 0, skipped = 0;
     try {
-      const data = await api.scanFolder(path);
-      setState(prev => {
-        const hydrate = (files: any[]): VideoFile[] => files.map(f => ({
-          ...f,
-          id: f.filePath,
-          status: (f.is_directory ? 'folder' : 'idle') as ProcessingStatus,
-          progress: 0,
-          sourceLang: prev.settings.sourceLang,
-          targetLanguages: prev.settings.targetLanguages,
-          workflowMode: prev.settings.workflowMode,
-          stripExistingSubs: prev.settings.stripExistingSubs,
-          selectedSrtPath: f.subtitleInfo?.externalPath ?? null,
-          children: f.is_directory ? hydrate(f.children || []) : null
-        }));
-        return { ...prev, items: hydrate(data.files || []), isScanning: false };
-      });
+      for (const [videoIds, options] of batches) {
+        const res = await api.createJobs({ video_ids: videoIds, languages: null, ...(options ? { options } : {}) });
+        created += res.jobs.length;
+        skipped += res.skipped.length;
+      }
+      setNotice({ tone: 'ok', text: `${created} video${created === 1 ? '' : 's'} queued${skipped ? `, ${skipped} skipped (already validated or already queued)` : ''}.` });
+      setSelected(new Set());
     } catch (e) {
-      console.error("Scan Failed:", e);
-      setState(prev => ({ ...prev, isScanning: false }));
+      const done = created ? ` (${created} queued before the error)` : '';
+      setNotice({ tone: 'error', text: `${(e as ApiError).message}${done}` });
     } finally {
-      scanInFlight.current = false;
+      setBusy(false);
     }
-  }, []);
+  };
 
-  // 3. SSE MANAGEMENT
-  const subscribeToUpdates = useCallback((fileId: string) => {
-    if (activeListeners.current[fileId]) activeListeners.current[fileId].close();
-
-    // Pass the RAW path. createSSEConnection does the single encodeURIComponent; encoding here
-    // as well produced %252F..., which the backend decodes to a key no emitter ever writes to,
-    // so the stream stayed silent and every card froze at 5%.
-    const es = createSSEConnection(fileId, (data: SSEEvent) => {
-      if (data.type === 'log') {
-        appendLog(fileId, data.message);
-        return;
-      }
-      if (data.type === 'status') {
-        updateVideoInList(fileId, {
-          status: (data.status || 'processing') as ProcessingStatus,
-          progress: data.progress ?? 0,
-          statusText: data.message
-        });
-        if (['done', 'error', 'cancelled'].includes(data.status || '')) {
-          es.close();
-          delete activeListeners.current[fileId];
-        }
-      }
-    }, () => {
-      delete activeListeners.current[fileId];
-    });
-
-    activeListeners.current[fileId] = es;
-  }, [updateVideoInList, appendLog]);
-
-  // 4. COMBINED ACTIONS
-  const actions = useMemo(() => ({
-    navigate: (path: string) => {
-      setState(prev => ({ ...prev, currentPath: path }));
-      performScan(path);
-    },
-
-    setSettings: (updates: Partial<GlobalSettings>) => {
-      setState(prev => {
-        const nextSettings = { ...prev.settings, ...updates };
-        const videoUpdates: Partial<VideoFile> = {};
-        if (updates.sourceLang) videoUpdates.sourceLang = updates.sourceLang;
-        if (updates.targetLanguages) videoUpdates.targetLanguages = updates.targetLanguages;
-        if (updates.workflowMode) videoUpdates.workflowMode = updates.workflowMode;
-        if (updates.stripExistingSubs !== undefined) videoUpdates.stripExistingSubs = updates.stripExistingSubs;
-
-        const applyToAll = (list: VideoFile[]): VideoFile[] => list.map(item => ({
-          ...item, ...videoUpdates,
-          children: item.children ? applyToAll(item.children) : null
-        }));
-
-        return { ...prev, settings: nextSettings, items: applyToAll(prev.items) };
-      });
-    },
-
-    updateVideoData: (id: string, updates: Partial<VideoFile>) => updateVideoInList(id, updates),
-
-    toggleSelection: (id: string, isDir: boolean, children?: VideoFile[]) => {
-      setState(prev => {
-        const next = new Set(prev.selectedIds);
-        const isAdding = !next.has(id);
-        const apply = (targetId: string, kids?: VideoFile[] | null) => {
-          if (isAdding) next.add(targetId); else next.delete(targetId);
-          if (kids) kids.forEach(child => apply(child.filePath, child.children));
-        };
-        apply(id, children);
-        return { ...prev, selectedIds: next };
-      });
-    },
-
-    scan: () => performScan(state.currentPath),
-
-    process: async (targetVideos: VideoFile[]) => {
-      const videosToStart = targetVideos.filter(v => v.status !== 'processing');
-      if (videosToStart.length === 0) return;
-
-      const payload = {
-        videos: videosToStart.map(v => ({
-          name: v.fileName,
-          path: v.filePath,
-          selectedSrtPath: v.selectedSrtPath || null,
-          src: v.sourceLang?.[0] || state.settings.sourceLang[0],
-          out: v.targetLanguages || state.settings.targetLanguages,
-          workflowMode: v.workflowMode || state.settings.workflowMode,
-          syncOffset: v.syncOffset || 0,
-          stripExistingSubs: v.stripExistingSubs ?? state.settings.stripExistingSubs,
-        })),
-        globalOptions: {
-          transcriptionEngine: state.settings.modelSize,
-          generateSRT: state.settings.autoGenerate,
-          muxIntoMkv: state.settings.shouldMux,
-          cleanUp: state.settings.shouldRemoveOriginal
-        }
-      };
-
-      videosToStart.forEach(v => {
-        updateVideoInList(v.id, { status: 'processing', progress: 5, statusText: 'Initializing...' });
-        subscribeToUpdates(v.filePath);
-      });
-
-      try {
-        await api.startJob(payload);
-      } catch (err) {
-        console.error("Job start failed:", err);
-        videosToStart.forEach(v => {
-          updateVideoInList(v.id, { status: 'error', statusText: 'Failed to connect to server' });
-        });
-      }
-    },
-
-    cancel: async (video: VideoFile) => {
-      updateVideoInList(video.id, { statusText: 'Cancelling...' });
-      try {
-        await api.cancelJob(video.filePath);
-      } catch (err) {
-        console.error("Cancel failed:", err);
-        updateVideoInList(video.id, { statusText: 'Cancel failed' });
-      }
-      // The backend confirms with a "cancelled" SSE frame; the card settles when it arrives.
-    },
-
-    abortAll: async () => {
-      try {
-        await api.abortAll();
-      } catch (err) {
-        console.error("Abort failed:", err);
-      }
-    }
-  }), [performScan, subscribeToUpdates, updateVideoInList, state.currentPath, state.settings]);
-
-  // 5. LIFECYCLE
-  useEffect(() => {
-    setMounted(true);
-    if (!hasInitialScanned.current) {
-      hasInitialScanned.current = true;
-      performScan("/data");
-    }
-
-    const listeners = activeListeners.current;
-    return () => {
-      Object.values(listeners).forEach(es => es.close());
-    };
-  }, [performScan]);
-
-  if (!mounted) return <div className="h-screen w-full bg-[#0a0a0a]" />;
+  const languages = lib?.languages ?? [];
+  const missingCount = (lang: string) => rows.filter(r => r.coverage.some(c => c.language === lang && c.state === 'missing')).length;
+  const selectedRows = rows.filter(r => selected.has(r.video.id));
+  // Validated videos are skipped by Start (D-0002 §5): never sent, and said so.
+  const toStart = selectedRows.filter(r => !r.video.validated).map(r => r.video.id);
+  const skippedValidated = selectedRows.length - toStart.length;
 
   return (
-    <StudioContext.Provider value={{ state, actions }}>
-      <DashboardContent />
-    </StudioContext.Provider>
+    <div className="h-full flex flex-col">
+      <header className="px-6 pt-5 pb-3 border-b border-white/10 space-y-3">
+        <div className="flex items-end justify-between gap-4">
+          <div>
+            <h1 className="text-lg font-semibold text-white">Library</h1>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {lib ? (
+                <>
+                  <span title={lib.root}>{lib.videos.length} videos</span>
+                  {languages.map(l => <span key={l}> · {languageName(l)} missing on {missingCount(l)}</span>)}
+                  {' · '}scanned {new Date(lib.scanned_at).toLocaleTimeString()}
+                </>
+              ) : loading ? 'Reading the library…' : ''}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={load}
+            disabled={loading}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-md text-xs border border-white/10 text-gray-300 hover:bg-white/5 disabled:opacity-50"
+          >
+            <RefreshCw size={13} className={loading ? 'animate-spin' : ''} aria-hidden />
+            {loading ? 'Rescanning…' : 'Rescan'}
+          </button>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <label className="relative flex-1 max-w-sm">
+            <span className="sr-only">Search videos</span>
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500" aria-hidden />
+            <input
+              type="search"
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder="Search by name or folder"
+              className="w-full bg-black/40 border border-white/10 rounded-md pl-8 pr-2 py-1.5 text-sm outline-none focus:border-indigo-500"
+            />
+          </label>
+          <label className="flex items-center gap-2 text-xs text-gray-400">
+            Show
+            <select
+              value={filter}
+              onChange={e => setFilter(e.target.value)}
+              className="bg-black/40 border border-white/10 rounded-md px-2 py-1.5 text-sm text-gray-200 outline-none focus:border-indigo-500"
+            >
+              <option value="all">All videos</option>
+              <option value="todo">Not validated yet</option>
+              {languages.map(l => <option key={l} value={`missing:${l}`}>Missing {languageName(l)}</option>)}
+              <option value="failed">Failed or unreadable</option>
+              <option value="active">In the queue</option>
+            </select>
+          </label>
+          <span className="text-xs text-gray-500">{visible.length} shown</span>
+          <Link href="/settings" className="ml-auto text-xs text-gray-400 hover:text-gray-200 underline underline-offset-2">
+            Languages: {languages.map(l => l.toUpperCase()).join(', ') || '—'}
+          </Link>
+        </div>
+      </header>
+
+      {loadError && (
+        <div role="alert" className="mx-6 mt-3 flex items-start gap-2 px-3 py-2 rounded-md bg-red-500/10 border border-red-500/30 text-red-300 text-sm">
+          <AlertCircle size={16} className="shrink-0 mt-0.5" aria-hidden />
+          <span>Could not read the library: {loadError}{lib ? ' The table below is from the previous scan.' : ''}</span>
+        </div>
+      )}
+      {lib && lib.warnings.length > 0 && (
+        <div role="status" className="mx-6 mt-3 px-3 py-2 rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs space-y-0.5">
+          {lib.warnings.map(w => <div key={w}>{w}</div>)}
+        </div>
+      )}
+
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        {!lib && loading && (
+          <div className="flex items-center justify-center gap-3 py-24 text-sm text-gray-400">
+            <Loader2 size={18} className="animate-spin text-indigo-400" aria-hidden /> Reading the library (first scan probes every video)…
+          </div>
+        )}
+        {lib && lib.videos.length === 0 && (
+          <div className="py-24 text-center text-sm text-gray-400">
+            No videos under <span className="font-mono">{lib.root}</span>. Put .mkv, .mp4 or .avi files there, then Rescan.
+          </div>
+        )}
+        {lib && lib.videos.length > 0 && visible.length === 0 && (
+          <div className="py-24 text-center text-sm text-gray-400">No video matches this search or filter.</div>
+        )}
+        {lib && visible.length > 0 && (
+          <LibraryTable
+            groups={groups}
+            languages={languages}
+            selected={selected}
+            onSelect={select}
+            overrides={overrides}
+            onOverride={(id, o) => setOverrides(prev => ({ ...prev, [id]: o }))}
+          />
+        )}
+      </div>
+
+      <footer className="px-6 py-3 border-t border-white/10 flex items-center gap-4 bg-[#0a0a0a]">
+        {notice ? (
+          <div role="status" className={`flex items-center gap-2 text-sm min-w-0 ${notice.tone === 'ok' ? 'text-emerald-300' : 'text-red-300'}`}>
+            {notice.tone === 'ok' ? <CheckCircle2 size={16} aria-hidden /> : <AlertCircle size={16} aria-hidden />}
+            <span className="truncate" title={notice.text}>{notice.text}</span>
+            <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss" title="Dismiss" className="text-gray-500 hover:text-gray-300">
+              <X size={14} />
+            </button>
+          </div>
+        ) : (
+          <span className="text-xs text-gray-500">
+            {selectedRows.length
+              ? `${selectedRows.length} selected${skippedValidated ? `, ${skippedValidated} already validated (skipped)` : ''}`
+              : 'Select videos (a folder checkbox selects the whole folder), then Start.'}
+          </span>
+        )}
+        <button
+          type="button"
+          disabled={busy || toStart.length === 0}
+          onClick={() => start(toStart)}
+          className="ml-auto flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white disabled:bg-white/5 disabled:text-gray-600 disabled:cursor-not-allowed"
+        >
+          {busy ? <Loader2 size={15} className="animate-spin" aria-hidden /> : <Play size={15} aria-hidden />}
+          Start{toStart.length ? ` (${toStart.length})` : ''}
+        </button>
+      </footer>
+    </div>
   );
 }
