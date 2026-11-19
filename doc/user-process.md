@@ -58,10 +58,12 @@ measurement first, by a model only for what needs judgement (workspace rule: a c
 Each video × language ends with a **verdict and its origin** (`kept`, `downloaded`, `translated from <lang>`,
 `transcribed`) and, when it failed, **one sentence saying why**.
 
-Relation to the existing rule `count_existing` (CLAUDE.md « Phase »): today every pre-existing subtitle is ignored,
-because the test corpus carries bad tracks from an older SubStudio. With the gate, rung 1 can **evaluate** them instead
-of ignoring them. Keep `count_existing` OFF until the gate has been shown on the bench to **reject** those old tracks;
-a gate that passes them would silently skip work.
+Relation to the existing rule `count_existing` (CLAUDE.md « Phase »): today every pre-existing subtitle is ignored.
+With the gate, rung 1 **evaluates** them instead. The 15 « English (SDH) » tracks of `C:\Videos` look like real release
+captions (Cyril, 2026-11-19): the bench checks their timing against the audio first, and **in sync they are English
+references the gate must accept**. The gate is proven on the bench in both directions before `count_existing` changes:
+it accepts those in-sync release tracks, and rejects seeded bad ones (shifted timing, wrong language, broken
+encoding). A gate that passes everything would silently skip work; one that rejects good tracks would redo it.
 
 ## 4. The result: the file, quietly updated
 
@@ -75,9 +77,12 @@ except maybe a `(Sub-OV,EN,FR)` at the end of the file name to validate the subt
   name; verify it (same video and audio streams, same duration within 1 s, every new subtitle track present and
   decodable); only then swap it in with an atomic rename. A failed verification leaves the source untouched. Needs free
   disk equal to one video during the swap.
-- **A video already good at rung 1** keeps its content; only the marker may be added (open question 2).
-- **Not MKV** (mp4): MP4 holds only `mov_text` subtitles; either mux as `mov_text` or remux to `.mkv` (changes the
-  extension). Open question 3.
+- **The marker lists the actual languages** (Cyril, 2026-11-19): `(Sub-EN,FR)` for an English-spoken video, never
+  the literal `OV`, and each language once.
+- **A video already good at rung 1 in every wanted language is left exactly as it was:** no new content, **no marker,
+  no rename** (Cyril, 2026-11-19). The UI still shows it as validated.
+- **Not MKV** (mp4): **converted to `.mkv`** by the same verified swap (Cyril, 2026-11-19), because MP4 only holds
+  `mov_text` subtitles. The extension changes; the `.mp4` is removed only once the `.mkv` has passed the check.
 - **Settled 2026-11-19:** Cyril confirmed in-place replacement everywhere, `C:\Videos` included, « after the check ».
   The verified swap above is the only allowed way (CLAUDE.md « Forbidden »); sidecar-by-default is dropped.
 
@@ -95,15 +100,15 @@ except maybe a `(Sub-OV,EN,FR)` at the end of the file name to validate the subt
 ## 6. Open questions (for Cyril)
 
 1. ~~In-place replacement~~: answered 2026-11-19, yes everywhere after the check (§4).
-2. **Marker:** is the name marker added even when nothing had to change (rung 1 good everywhere)? Does it use the
-   literal `OV` or the detected language (`(Sub-EN,FR)` when OV is English)? Renaming may make a media server
-   (Plex, Jellyfin) treat the file as new and lose its watch history **(hypothesis)**.
-3. **MP4 sources:** keep `.mp4` with `mov_text` tracks, or remux to `.mkv`?
+2. ~~Marker~~: answered 2026-11-19: no marker on an untouched file; the actual languages, `(Sub-EN,FR)` (§4).
+3. ~~MP4 sources~~: answered 2026-11-19: convert to `.mkv` (§4).
+
+All answered. Residual risk, not a question: a rename or `.mp4` → `.mkv` may make Plex or Jellyfin treat the file as
+new and lose its watch history **(hypothesis, untested)**.
 
 ## 7. How we will know it worked
 
 - From opening the app to a running batch on 22 episodes: **select, (languages already set), Start: ≤ 3 clicks**.
 - Every video × language ends `✓ <origin>` or a one-sentence failure: **100 %**, none silently skipped.
 - Share of cells filled by rungs 1–2 (human subtitles) vs 3–4 (machine), reported per batch.
-- A video whose subtitles were already good is **byte-identical** afterwards (apart from the name, if question 2 says
-  so).
+- A video whose subtitles were already good is **byte-identical and keeps its name** afterwards.
