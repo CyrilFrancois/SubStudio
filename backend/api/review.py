@@ -35,7 +35,8 @@ def flag_cues(cue_list: CueList) -> CueList:
             flags.append("broken_text")
         if prev is not None and prev.text.strip() == c.text.strip():
             flags.append("duplicate")
-        if c.id in same_as_source:
+        # Compared with its source while the run holds it; else as the file recorded it (SUBSTUDIO_UNTRANSLATED).
+        if c.id in same_as_source or c.untranslated_from is not None:
             flags.append("untranslated")
         out.append(c.model_copy(update={"flags": flags}))
         prev = c

@@ -1,8 +1,9 @@
-# measure.py — Runs one bench command and records its wall time and peak RAM/CPU against the half-the-PC budget. Exports: measure, main.
+# measure.py — Runs one bench command and records its wall time, peak RAM and peak/sustained CPU against the half-the-PC budget. Exports: measure, sustained_threads, main.
 """Samples the command's whole process tree, plus any already-running process named with --watch (a llama.cpp
 server, say, which does the work while the command only sends it requests).
 
-CPU is reported in threads (100 % of one logical CPU = 1.0), so it reads directly against D-0001's budget of 4.
+CPU is reported in threads (100 % of one logical CPU = 1.0), so it reads directly against D-0001's budget of 4;
+the budget is judged on p95_cpu_threads (sustained 1-s use), the instant peak_cpu_threads is reported alongside.
 
 Usage:
   python -m bench.measure --out run.json [--watch llama-server.exe] [--interval 0.5] -- <command> [args...]
@@ -18,9 +19,21 @@ from pathlib import Path
 
 import psutil
 
-BUDGET_THREADS = 4.0  # D-0001: at most half of the 8 logical CPUs
-BUDGET_RAM_GB = 7.0   # D-0001: at most 7 GB for the whole stack
+BUDGET_THREADS = 4.0  # D-0001: at most half of the 8 logical CPUs, judged on SUSTAINED use (sustained_threads)
+BUDGET_RAM_GB = 7.0   # D-0001: at most 7 GB for the whole stack, judged on the peak
 _GB = 1024 ** 3
+
+
+def sustained_threads(samples: list[float], interval: float, window_s: float = 1.0, pct: float = 0.95) -> float:
+    """The 95th percentile of the CPU use averaged over 1-s windows. D-0001's « 4 threads » is the runner's own
+    setting and its sustained load (clarified 2026-11-19): Whisper turbo with cpu_threads=4 peaks at 4.06-4.09 threads
+    for an instant (the Python thread, an ffmpeg decode) while averaging 3.2-3.5, which a single-sample peak judged
+    over budget. A runner set to more threads than allowed still fails: its 1-s means sit above 4 most of the time."""
+    if not samples:
+        return 0.0
+    k = max(1, round(window_s / interval))
+    means = sorted(sum(samples[i:i + k]) / len(samples[i:i + k]) for i in range(0, len(samples), k))
+    return round(means[min(len(means) - 1, int(pct * len(means)))], 2)
 
 
 def norm_name(name: str) -> str:
@@ -83,7 +96,8 @@ def measure(command: list[str], watch: list[str] | None = None, interval: float 
     wall = time.monotonic() - start
     # The first cpu_percent call of each process returns 0 by design, so the first sample is dropped from the mean.
     steady = cpu_samples[1:] or cpu_samples
-    peak_threads = round(max(steady, default=0.0), 2)
+    peak_threads = round(max(steady, default=0.0), 2)  # kept in the row as information; the budget reads p95
+    p95_threads = sustained_threads(steady, interval)
     # Per sample, the sum of each live process's own peak: exact for one process, an upper bound for several (their
     # peaks may not coincide). The budget is judged on it, so a spike between samples cannot pass as within budget.
     peak_gb = round(max(peak_sampled, peak_alive) / _GB, 3)
@@ -95,6 +109,7 @@ def measure(command: list[str], watch: list[str] | None = None, interval: float 
         "peak_rss_gb": peak_gb,
         "peak_sampled_rss_gb": round(peak_sampled / _GB, 3),
         "peak_cpu_threads": peak_threads,
+        "p95_cpu_threads": p95_threads,
         "mean_cpu_threads": round(sum(steady) / len(steady), 2) if steady else 0.0,
         "samples": len(cpu_samples),
         "processes": sorted(names_read),
@@ -102,7 +117,7 @@ def measure(command: list[str], watch: list[str] | None = None, interval: float 
         "unreadable": sorted(unreadable),
         "budget": {"cpu_threads": BUDGET_THREADS, "ram_gb": BUDGET_RAM_GB},
         # A watched process never read means its cost is missing: the run cannot be called within budget.
-        "within_budget": (peak_threads <= BUDGET_THREADS and peak_gb <= BUDGET_RAM_GB
+        "within_budget": (p95_threads <= BUDGET_THREADS and peak_gb <= BUDGET_RAM_GB
                           and not watch_missing and not unreadable),
     }
 

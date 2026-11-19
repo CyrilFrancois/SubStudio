@@ -5,7 +5,7 @@ so both read a video the same way. Moved unchanged from inplace.py (2026-11-19, 
 import json
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Sequence, Set, Union
 
 from ..acquire.plan import normalize_language
 from ..jobs import JobAborted, JobHandle
@@ -56,9 +56,10 @@ def _is_cover(stream: dict) -> bool:
     return bool(stream.get("disposition", {}).get("attached_pic"))
 
 
-def _disposition(s: dict) -> str:
-    """The source stream's flags as ffmpeg's -disposition value (`default+forced`, or `0` for none)."""
-    on = [k for k, v in s.get("disposition", {}).items() if v]
+def _disposition(s: dict, demoted: bool = False) -> str:
+    """The source stream's flags as ffmpeg's -disposition value (`default+forced`, or `0` for none); `demoted`
+    drops « default » and keeps the rest."""
+    on = [k for k, v in s.get("disposition", {}).items() if v and not (demoted and k == "default")]
     return "+".join(on) if on else "0"
 
 
@@ -67,12 +68,14 @@ def _flags(s: dict) -> tuple:
     return (int(d.get("default", 0)), int(d.get("forced", 0)))
 
 
-def _sub_key(s: dict) -> tuple:
-    """What must survive of a kept subtitle track. MP4 text becomes SRT in MKV, so mov_text counts as subrip."""
+def _sub_key(s: dict, demoted: bool = False) -> tuple:
+    """What must survive of a kept subtitle track. MP4 text becomes SRT in MKV, so mov_text counts as subrip;
+    `demoted`: the track is expected without « default » (_disposition)."""
     codec = s.get("codec_name", "?")
     tags = s.get("tags", {})
+    default, forced = _flags(s)
     return ("subrip" if codec in _TEXT_TO_SRT else codec, normalize_language(tags.get("language")),
-            tags.get("title"), _flags(s))
+            tags.get("title"), (0 if demoted else default, forced))
 
 
 def _signature(info: dict) -> dict:
@@ -116,3 +119,19 @@ def _kept_subs(info: dict, new_langs: Set[str]) -> List[dict]:
             continue
         kept.append(s)
     return kept
+
+
+def _sub_plan(info: dict, new_langs: Sequence[str]) -> List[Union[dict, str]]:
+    """The new file's subtitle tracks in order: each kept source stream (its ffprobe dict) in source order, and our
+    track of each new language (its code) placed just BEFORE the first kept track of that language, else at the end.
+    A player given « English » takes the first English track: on S05E21 it was the old one the gate had rejected.
+    The mux follows this plan and the check recomputes it from the source, so a file in another order is refused."""
+    plan: List[Union[dict, str]] = []
+    placed: Set[str] = set()
+    for s in _kept_subs(info, set(new_langs)):
+        lang = normalize_language(s.get("tags", {}).get("language"))
+        if lang in new_langs and lang not in placed:
+            plan.append(lang)
+            placed.add(lang)
+        plan.append(s)
+    return plan + [lang for lang in new_langs if lang not in placed]

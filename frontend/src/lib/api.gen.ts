@@ -178,6 +178,11 @@ export interface components {
             start_ms: number;
             /** Text */
             text: string;
+            /**
+             * Untranslated From
+             * @description Set on GET when the file records this line as left in that language (SUBSTUDIO_UNTRANSLATED); 'und' when the language was not recorded. Ignored on PUT.
+             */
+            untranslated_from?: string | null;
         };
         /**
          * CueLimits
@@ -388,6 +393,12 @@ export interface components {
              * @enum {string}
              */
             state: "passed" | "missing" | "unchecked" | "pending" | "running" | "failed" | "unknown";
+            /**
+             * Untranslated
+             * @description Set when state is 'passed': lines the translation left in from_language.
+             * @default 0
+             */
+            untranslated?: number;
         };
         /**
          * LibraryChangedEvent
@@ -585,6 +596,11 @@ export interface components {
              */
             counted: boolean;
             /**
+             * From Language
+             * @description SubStudio translations: the language it was translated from (SUBSTUDIO_FROM tag).
+             */
+            from_language?: string | null;
+            /**
              * Kind
              * @enum {string}
              */
@@ -633,6 +649,12 @@ export interface components {
             stream_index?: number | null;
             /** Title */
             title?: string | null;
+            /**
+             * Untranslated
+             * @description SubStudio translations: lines still in from_language (SUBSTUDIO_UNTRANSLATED tag).
+             * @default 0
+             */
+            untranslated?: number;
         };
         /** SystemStatus */
         SystemStatus: {

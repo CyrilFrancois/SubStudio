@@ -1,14 +1,16 @@
-# track.py — Reads back the subtitle track SubStudio wrote into a video: its cues and its origin and reviewed tags. Exports: SubStudioTrack, read_track.
+# track.py — Reads back the subtitle track SubStudio wrote into a video: its cues and its origin, reviewed, source-language and untranslated-lines tags. Exports: SubStudioTrack, read_track.
 """What a person reviews is what shipped: the « SubStudio <lang> » track inside the video (core/provenance), read with
 ffmpeg straight to stdout, so nothing is ever written next to a video in the library. Cue ids are the track's
 positions, 1..n, the order the swap wrote them in."""
 
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
-from ..provenance import ORIGIN_TAG, REVIEWED_TAG, REVIEWED_YES, substudio_track_title
+from ..acquire.plan import normalize_language
+from ..provenance import (FROM_TAG, ORIGIN_TAG, REVIEWED_TAG, REVIEWED_YES, UNTRANSLATED_TAG, parse_cue_ids,
+                          substudio_track_title)
 from ..subtitles import Cue, SubtitleReadError, parse
 from .media import OutputError, _probe
 
@@ -18,6 +20,8 @@ class SubStudioTrack:
     cues: List[Cue]
     origin: Optional[str]     # provenance.ORIGINS, or None for a track written before the tag existed
     reviewed: bool
+    from_language: Optional[str] = None                  # FROM_TAG: what it was translated from
+    untranslated: List[int] = field(default_factory=list)  # UNTRANSLATED_TAG: cue ids (positions) still in it
 
 
 def read_track(video: Path, lang: str) -> Optional[SubStudioTrack]:
@@ -42,4 +46,6 @@ def read_track(video: Path, lang: str) -> Optional[SubStudioTrack]:
     except (UnicodeDecodeError, SubtitleReadError) as e:
         raise OutputError(f"the « {title} » track cannot be read: {e}") from e
     tags = {k.upper(): v for k, v in stream.get("tags", {}).items()}
-    return SubStudioTrack(cues=cues, origin=tags.get(ORIGIN_TAG), reviewed=tags.get(REVIEWED_TAG) == REVIEWED_YES)
+    return SubStudioTrack(cues=cues, origin=tags.get(ORIGIN_TAG), reviewed=tags.get(REVIEWED_TAG) == REVIEWED_YES,
+                          from_language=normalize_language(tags.get(FROM_TAG)),
+                          untranslated=[i for i in parse_cue_ids(tags.get(UNTRANSLATED_TAG)) if i <= len(cues)])
