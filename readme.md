@@ -152,7 +152,7 @@ Every setting is an environment variable. `.env.example` lists them with their d
 | `LLAMA_MODEL_PATH` | `%LOCALAPPDATA%\SubStudio\models\translategemma-4b-it-Q4_K_M.gguf` | The local translation model. |
 | `LLAMA_GPU_LAYERS` | `99` | Layers on the integrated GPU; `0` = CPU only. |
 | `LLAMA_PORT` | `8092` | Port of that server, on 127.0.0.1. |
-| `GEMINI_API_KEY` | empty | Only with `TRANSLATOR=gemini` (https://aistudio.google.com/apikey). |
+| `GEMINI_API_KEY` | empty | Only with `TRANSLATOR=gemini` (https://aistudio.google.com/apikey). With `gemini` and no key, the backend stops at start, so nothing is ever sent without one. |
 | `GEMINI_MODEL` | `gemini-3.8-flash` | Only with `TRANSLATOR=gemini`. Must be a Gemini 3.x model. |
 | `OPENSUBTITLES_USERNAME`, `OPENSUBTITLES_PASSWORD` | empty | Optional free OpenSubtitles.com account: adds the largest catalogue and exact-file matches. Without it, only keyless providers are asked. |
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Where the frontend finds the backend. Applied when `npm run dev` starts. |
