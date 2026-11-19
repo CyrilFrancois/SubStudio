@@ -163,19 +163,33 @@ class EventFrameDoc(BaseModel):
 
 # --- Subtitles (review screen) ---------------------------------------------------------------
 
+# What the quality gate (core/gate) would hold against ONE line, set by api/review.flag_cues from the gate's own
+# measures and THRESHOLDS, so the Review screen points at the lines that make a track fail.
+CueFlag = Literal["too_fast", "long_line", "broken_text", "duplicate", "untranslated"]
+
+
 class Cue(BaseModel):
     id: int = Field(..., description="Position in the source cue list; the translator keys on it.")
     start_ms: int
     end_ms: int
     text: str
     source_text: Optional[str] = Field(None, description="The cue it was translated from, when translated.")
+    flags: List[CueFlag] = Field(default_factory=list, description="Set by the backend on GET; ignored on PUT.")
+
+
+class CueLimits(BaseModel):
+    """The gate's per-line limits (core/gate THRESHOLDS), sent so the screen can say « over 35 characters a second »."""
+    max_cps: float
+    max_line_chars: int
 
 
 class CueList(BaseModel):
     video_id: str
     language: LanguageCode
     origin: CoverageOrigin
+    from_language: Optional[LanguageCode] = Field(None, description="Language of source_text, when translated.")
     reviewed: bool = False
+    limits: Optional[CueLimits] = Field(None, description="Set by the backend on GET; ignored on PUT.")
     cues: List[Cue]
 
 

@@ -7,6 +7,21 @@
             "title": "End Ms",
             "type": "integer"
           },
+          "flags": {
+            "description": "Set by the backend on GET; ignored on PUT.",
+            "items": {
+              "enum": [
+                "too_fast",
+                "long_line",
+                "broken_text",
+                "duplicate",
+                "untranslated"
+              ],
+              "type": "string"
+            },
+            "title": "Flags",
+            "type": "array"
+          },
           "id": {
             "description": "Position in the source cue list; the translator keys on it.",
             "title": "Id",
@@ -42,6 +57,25 @@
         "title": "Cue",
         "type": "object"
       },
+      "CueLimits": {
+        "description": "The gate's per-line limits (core/gate THRESHOLDS), sent so the screen can say « over 35 characters a second ».",
+        "properties": {
+          "max_cps": {
+            "title": "Max Cps",
+            "type": "number"
+          },
+          "max_line_chars": {
+            "title": "Max Line Chars",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_cps",
+          "max_line_chars"
+        ],
+        "title": "CueLimits",
+        "type": "object"
+      },
       "CueList": {
         "properties": {
           "cues": {
@@ -51,9 +85,32 @@
             "title": "Cues",
             "type": "array"
           },
+          "from_language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Language of source_text, when translated.",
+            "title": "From Language"
+          },
           "language": {
             "title": "Language",
             "type": "string"
+          },
+          "limits": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CueLimits"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set by the backend on GET; ignored on PUT."
           },
           "origin": {
             "enum": [

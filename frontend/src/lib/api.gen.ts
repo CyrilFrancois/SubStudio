@@ -151,6 +151,11 @@ export interface components {
             /** End Ms */
             end_ms: number;
             /**
+             * Flags
+             * @description Set by the backend on GET; ignored on PUT.
+             */
+            flags?: ("too_fast" | "long_line" | "broken_text" | "duplicate" | "untranslated")[];
+            /**
              * Id
              * @description Position in the source cue list; the translator keys on it.
              */
@@ -165,12 +170,29 @@ export interface components {
             /** Text */
             text: string;
         };
+        /**
+         * CueLimits
+         * @description The gate's per-line limits (core/gate THRESHOLDS), sent so the screen can say « over 35 characters a second ».
+         */
+        CueLimits: {
+            /** Max Cps */
+            max_cps: number;
+            /** Max Line Chars */
+            max_line_chars: number;
+        };
         /** CueList */
         CueList: {
             /** Cues */
             cues: components["schemas"]["Cue"][];
+            /**
+             * From Language
+             * @description Language of source_text, when translated.
+             */
+            from_language?: string | null;
             /** Language */
             language: string;
+            /** @description Set by the backend on GET; ignored on PUT. */
+            limits?: components["schemas"]["CueLimits"] | null;
             /**
              * Origin
              * @enum {string}
