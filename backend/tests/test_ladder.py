@@ -206,3 +206,27 @@ def test_retry_searches_with_the_video_as_it_is_now(monkeypatch):
     run.cells["fr"].state = CellState.PENDING
     asyncio.run(retry.fill("fr"))
     assert seen == ["v (Sub-EN).mkv"]
+
+
+def test_each_source_gets_the_context_with_its_own_names():
+    # The glossary must hold the names of the subtitle actually being translated (core/context.get_context).
+    from core.subtitles import TranslationContext
+    seen = []
+
+    def context(c):
+        seen.append(c)
+        return TranslationContext(title="Ghosts (2021) S05E07", glossary=("Hetty",) if c else ())
+    ours = ExistingSub("en", "embedded", "0", marked=True)
+    run, ladder, _, _ = make(["en", "fr"], [ours], downloads=False)
+    ladder.deps.context = context
+    go(run, ladder)
+    src = run.human["en"]
+    assert src.context.glossary == ("Hetty",) and src.context.source_lang == "en" and not src.context.source_is_asr
+    assert seen and seen[0] == src.cues
+
+
+def test_offline_context_says_why_nothing_was_looked_up():
+    pytest.importorskip("faster_whisper")
+    import main
+    ctx = main.PipelineOrchestrator()._context("C:/x/Ghosts.2021.S05E07.mkv")  # conftest: SUBSTUDIO_DOWNLOADS=0
+    assert "online lookups are off" in ctx.missing and ctx.season == 5 and ctx.episode == 7

@@ -21,7 +21,7 @@ from .acquire import FetchResult, ProvidersUnavailable, fetch
 from .acquire.types import ExistingSub, Rung
 from .cells import CellState, Origin, Source, VideoRun, produce_cell
 from .jobs import JobAborted
-from .subtitles import Cue, Translator, detect_language, load_file
+from .subtitles import Cue, TranslationContext, Translator, detect_language, load_file
 
 logger = logging.getLogger("SubStudio.Ladder")
 
@@ -46,6 +46,9 @@ class LadderDeps:
     # The user's pick when its language cannot be detected (too little text): no rung 1 for it, but still a human
     # source to translate from, as the user asked.
     unlabelled: Optional[List[Cue]] = None
+    # The context for a source made of these cues (core/context.get_context: the lookup plus the names in them).
+    # None: the run's context as is.
+    context: Optional[Callable[[Optional[List[Cue]]], TranslationContext]] = None
     check_abort: Callable[[], None] = lambda: None
     progress: Callable[[str, int, str], None] = lambda status, percent, message: None
 
@@ -62,9 +65,13 @@ class Ladder:
             cell.attempts.append(text)
         logger.info(f"{lang.upper()}: {text}")
 
+    def _context_for(self, cues: List[Cue], lang: Optional[str], asr: bool) -> TranslationContext:
+        base = self.deps.context(cues) if self.deps.context else self.run.context
+        return replace(base, source_lang=lang, source_is_asr=asr)
+
     def _accept(self, lang: str, cues: List[Cue], rung: Rung) -> None:
         self.run.human[lang] = Source(cues=cues, rung=rung, language=lang,
-                                      context=replace(self.run.context, source_lang=lang, source_is_asr=False))
+                                      context=self._context_for(cues, lang, False))
         cell = self.run.cells.get(lang)
         if cell is not None:
             cell.cues, cell.origin, cell.state, cell.reason = cues, Origin(rung), CellState.PASSED, ""
@@ -89,7 +96,7 @@ class Ladder:
             await self._download(to_download)
         if self.deps.unlabelled:
             self.run.human[_UNLABELLED] = Source(cues=self.deps.unlabelled, rung=Rung.EXISTING, language=None,
-                                                 context=replace(self.run.context, source_is_asr=False))
+                                                 context=self._context_for(self.deps.unlabelled, None, False))
 
     async def _existing(self, sub: ExistingSub) -> Tuple[Optional[List[Cue]], str]:
         if not sub.marked and not self.deps.count_existing:
@@ -201,5 +208,5 @@ class Ladder:
                 raise RuntimeError("no speech detected")
             lang = spoken or detect_language(cues)
             self.run.asr = Source(cues=cues, rung=Rung.ASR, language=lang,
-                                  context=replace(self.run.context, source_lang=lang, source_is_asr=True))
+                                  context=self._context_for(cues, lang, True))
         return self.run.asr

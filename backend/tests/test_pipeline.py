@@ -48,7 +48,6 @@ def clip(tmp_path):
 def run(video, translator, out=("fr",)):
     orch = main.PipelineOrchestrator()
     orch.translator = translator
-    orch.translator.get_context_profile = lambda name: "notes"
     job = main.VideoJob(name=video.name, path=str(video), out=list(out), workflowMode="hybrid", syncOffset=0.25)
     opts = main.GlobalOptions()
     asyncio.run(orch.execute_pipeline(job, opts, 0, 1))
