@@ -18,4 +18,6 @@ COPY . .
 
 EXPOSE 3000
 
-CMD ["npm", "run", "dev"]
+# Inside a container the server must listen on every interface for the port mapping to reach it;
+# on the host, package.json binds 127.0.0.1 so the app is never exposed to the network.
+CMD ["npx", "next", "dev", "-H", "0.0.0.0"]
