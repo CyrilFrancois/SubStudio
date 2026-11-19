@@ -3,8 +3,9 @@
 
 - jobs     one row per video × requested languages: state, stages (JSON), times, one-sentence error;
 - logs     every line a job emitted, with the backend's timestamp, so a fresh tab shows the history;
-- verdicts the subtitles the quality gate accepted and left untouched, per exact file (path + mtime + size),
-           read by api/library._verdicts() so a « kept » subtitle counts as coverage after a rescan.
+- verdicts the quality gate's verdict on each pre-existing subtitle, per exact file (path + mtime + size): its
+           origin when accepted (« kept »), provenance.REJECTED when refused; read by api/library._verdicts() so
+           a kept subtitle counts as coverage after a rescan and a refused one says why.
 
 Every change of a job publishes a full JobEvent on api.events_hub.hub. A job that was running when the backend
 stopped is marked failed on the next start (recover()): it never looks « running » forever.
@@ -28,7 +29,9 @@ from .schemas import Job, JobCreate, JobCreateResponse, JobEvent, JobOptions, Li
 
 logger = logging.getLogger("SubStudio.JobStore")
 
-STAGES = ("check", "download", "transcribe", "correct", "translate", "write")
+# No « correct »: speech-to-text ships without a correction pass (D-0005); a stage that never runs would keep the
+# bar under 100 %. Jobs stored with it are read without it (_row_to_job).
+STAGES = ("check", "download", "transcribe", "translate", "write")
 LOG_KEEP_PER_JOB = 2000            # a 45-min episode emits a few hundred lines; the cap only stops a runaway loop
 RESTART_REASON = "Interrupted: the backend stopped while this job was running. Start it again."
 
@@ -84,13 +87,17 @@ class JobStore:
         with self._lock:
             self._db.execute("PRAGMA journal_mode=WAL")
             self._db.executescript(_SCHEMA)
+            cols = {r["name"] for r in self._db.execute("PRAGMA table_info(jobs)")}
+            if "batch_id" not in cols:   # a store created before batches: add the column, old jobs have none
+                self._db.execute("ALTER TABLE jobs ADD COLUMN batch_id TEXT")
 
     # ------------------------------------------------------------ reading
 
     def _row_to_job(self, r: sqlite3.Row, position: Optional[int]) -> Job:
         return Job(id=r["id"], video_id=r["video_id"], video_name=r["video_name"],
                    languages=json.loads(r["languages"]), state=r["state"], position=position,
-                   stages=[StageProgress(**s) for s in json.loads(r["stages"])],
+                   batch_id=r["batch_id"],
+                   stages=[StageProgress(**s) for s in json.loads(r["stages"]) if s["stage"] in STAGES],
                    created_at=r["created_at"], started_at=r["started_at"], finished_at=r["finished_at"],
                    error=r["error"])
 
@@ -157,6 +164,7 @@ class JobStore:
         passed; a video already queued or running is skipped, never queued twice."""
         videos = {v.id: v for v in (library.videos if library else [])}
         created, skipped = [], []
+        batch = uuid.uuid4().hex[:12]   # one per request: the Queue's « x of N » counts its jobs, finished ones too
         with self._lock:
             busy = {r["video_id"] for r in self._db.execute(
                 "SELECT video_id FROM jobs WHERE state IN ('queued','running')").fetchall()}
@@ -174,9 +182,9 @@ class JobStore:
                 stages = [StageProgress(stage=s, state="pending").model_dump() for s in STAGES]
                 self._db.execute(
                     "INSERT INTO jobs (id, video_id, video_path, video_name, languages, options, state, stages, "
-                    "created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                    "created_at, batch_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
                     (job_id, vid, v.path, v.name, json.dumps(langs), req.options.model_dump_json(), "queued",
-                     json.dumps(stages), _iso(_now())))
+                     json.dumps(stages), _iso(_now()), batch))
                 busy.add(vid)
                 created.append(job_id)
         jobs = [self._publish(j) for j in created]
@@ -202,8 +210,10 @@ class JobStore:
 
     def set_stage(self, job_id: str, stage: str, state: str, progress: float = 0.0,
                   eta_s: Optional[float] = None, detail: Optional[str] = None) -> Optional[Job]:
-        """Moves the stepper forward: earlier running stages become done, earlier pending ones skipped. The bar of
-        a stage never goes backwards (D-0002 §5): a lower progress for the same running stage is ignored."""
+        """Moves the stepper: earlier running stages become done, earlier pending ones skipped (or done when they
+        had started). One stage runs at a time: the ladder may transcribe after a translation began, so a later
+        running stage pauses back to pending, keeping its progress. The bar of a stage never goes backwards
+        (D-0002 §5): a lower progress for the same running stage is ignored."""
         if stage not in STAGES:
             raise ValueError(f"Unknown stage {stage!r}")
         with self._lock:
@@ -211,14 +221,17 @@ class JobStore:
             if r is None or r["state"] != "running":
                 return None
             stages = json.loads(r["stages"])
-            target = STAGES.index(stage)
+            stages = [s for s in stages if s["stage"] in STAGES]   # a job stored with « correct » (before D-0005)
+            target = [s["stage"] for s in stages].index(stage)
             for i, s in enumerate(stages):
-                if i < target and s["state"] == "running":
+                if i < target and (s["state"] == "running" or (s["state"] == "pending" and s["progress"] > 0)):
                     s.update(state="done", progress=1.0, eta_s=None)
                 elif i < target and s["state"] == "pending":
                     s.update(state="skipped")
+                elif i > target and s["state"] == "running":
+                    s.update(state="pending", eta_s=None)
             cur = stages[target]
-            if cur["state"] == state == "running" and progress < cur["progress"]:
+            if state == "running" and cur["state"] in ("running", "pending") and progress < cur["progress"]:
                 progress = cur["progress"]
             cur.update(state=state, progress=max(0.0, min(1.0, progress)), eta_s=eta_s,
                        detail=detail if detail is not None else cur.get("detail"))
@@ -233,9 +246,11 @@ class JobStore:
             r = self._db.execute("SELECT stages, state FROM jobs WHERE id=?", (job_id,)).fetchone()
             if r is None or r["state"] in ("done", "failed", "cancelled"):
                 return self.get(job_id)
-            stages = json.loads(r["stages"])
+            stages = [s for s in json.loads(r["stages"]) if s["stage"] in STAGES]
             for s in stages:
-                if s["state"] == "running":
+                if s["state"] == "pending" and s["progress"] > 0 and state == "done":
+                    s.update(state="done", progress=1.0, eta_s=None)   # paused by a later frame, then finished
+                elif s["state"] == "running":
                     s.update(state="done" if state == "done" else "failed" if state == "failed" else "skipped",
                              eta_s=None, progress=1.0 if state == "done" else s["progress"])
                 elif s["state"] == "pending":
@@ -284,8 +299,9 @@ class JobStore:
     # ------------------------------------------------------------ verdicts
 
     def record_verdicts(self, path: str, st: os.stat_result, verdicts: Dict[str, str]):
-        """{track_key: origin} for subtitles of this exact file that the quality gate accepted and left untouched.
-        Replaces the file's earlier record: a new verdict is about the file as it is now."""
+        """{track_key: origin} for subtitles of this exact file the quality gate accepted and left untouched,
+        {track_key: provenance.REJECTED} for those it refused (output/run.verdict_record). Replaces the file's
+        earlier record: a new verdict is about the file as it is now."""
         key = _path_key(path)
         with self._lock:
             self._db.execute("DELETE FROM verdicts WHERE path_key=?", (key,))

@@ -5,9 +5,10 @@ there (rung 1), then ONE download call for every language still missing (rung 2)
 that is still open translate from a human subtitle that passed (rung 3), or, when no good subtitle exists anywhere,
 transcribe once and translate the transcript (rung 4). A machine translation is never the source of another one.
 
-The quality gate (task 7) plugs into `_existing` and `_download`: until it exists in code, a subtitle the current
-SubStudio did not make is « ignored » unless `count_existing` is on (CLAUDE.md « Phase »), and a download counts
-only when ffsubsync could match it to the audio.
+The quality gate (core/gate, `deps.gate`) judges every subtitle before it counts: an existing one (`_existing`), a
+download that ffsubsync could match to the audio (`_download`), and each translation or transcript (`_produce`). A
+rejected one falls through to the next rung with the gate's sentence. A subtitle the current SubStudio did not make
+is « ignored » only when `count_existing` is off; it is on by default (Cyril, 2026-11-19, D-0002).
 """
 import asyncio
 import hashlib
@@ -122,6 +123,7 @@ class Ladder:
         if not cues:
             return None, f"{sub.language} {sub.kind} has no lines"
         why = await self._verdict(cues, sub.language, label=sub.language)
+        self.run.judged[(sub.kind, sub.ref)] = why is None
         return (None, f"{sub.language} {sub.kind} rejected: {why}") if why else (cues, "")
 
     async def _download(self, langs: List[str]) -> None:
@@ -130,7 +132,17 @@ class Ladder:
             # The video as it is now (renamed « X (Sub-…).mkv » after a swap, when a retry searches again); the work
             # folder stays keyed on the queued path so a retry finds the same one.
             video_now = self.run.output_path or self.run.path
-            result = await asyncio.to_thread(self.deps.fetch, video_now, langs, work_dir_for(self.run.path))
+            # Each candidate is gated inside the search, so a rejected one makes room for the next (another cut or
+            # release); the speech the gate measures against is read once, before.
+            unchecked = await self._speech_ready()
+
+            def accept(lang: str, path: str) -> Optional[str]:
+                if unchecked:
+                    return unchecked
+                return self._verdict_now(load_file(path), lang)
+
+            result = await asyncio.to_thread(self.deps.fetch, video_now, langs, work_dir_for(self.run.path),
+                                             accept=accept)
         except JobAborted:
             raise
         except ProvidersUnavailable:
@@ -144,29 +156,23 @@ class Ladder:
             return
         down = f" ({', '.join(sorted(result.failed_providers))} unreachable)" if result.failed_providers else ""
         for lang in langs:
+            for why in result.rejected.get(lang, []):
+                self._note(lang, f"download: rejected {why}")
             got = result.subtitles.get(lang)
-            if got is None:
+            if got is not None:
+                self._accept(lang, await asyncio.to_thread(load_file, got.path), Rung.DOWNLOAD)
+            elif not result.rejected.get(lang):
                 self._note(lang, f"download: none found online{down}")
-            elif not got.synced:
-                self._note(lang, "download: found, but it could not be matched to the audio")
-            else:
-                try:
-                    got_cues = await asyncio.to_thread(load_file, got.path)
-                except Exception as e:
-                    self._note(lang, f"download: unreadable file: {str(e)[:120]}")
-                    continue
-                why = await self._verdict(got_cues, lang)
-                if why:
-                    self._note(lang, f"download: rejected: {why}")
-                else:
-                    self._accept(lang, got_cues, Rung.DOWNLOAD)
 
     async def _search_again(self, lang: str) -> bool:
         cell, plan = self.run.cells[lang], self.run.plans[lang]
         earlier = [a for a in cell.attempts if a.startswith("download")]
+        # Search again only after a failure that can pass (no site answered, a quota, nothing listed yet), never when
+        # every candidate was downloaded and judged: the same files would come back and be turned down again.
+        transient = ("none found online", "no subtitle site answered", "could not be downloaded", "download failed")
         if (self._searched or not self.deps.downloads_enabled or not earlier
                 or not any(s.rung == Rung.DOWNLOAD for s in plan.steps)
-                or any("could not be matched to the audio" in a for a in earlier)):
+                or not any(t in a for a in earlier for t in transient)):
             return False
         # The fresh search replaces the old lines, so the attempts read as what happened on this retry.
         cell.attempts = [a for a in cell.attempts if not a.startswith("download")]
@@ -230,28 +236,41 @@ class Ladder:
             return False
         return True
 
-    async def _verdict(self, cues: List[Cue], lang: str, label: Optional[str] = None,
-                       source: Optional[List[Cue]] = None, timing_from_audio: bool = False) -> Optional[str]:
-        """None when the gate passes `cues` for `lang`, else its one sentence (Verdict.reason). The speech is the
-        gate's own (core/gate.detect_speech), read once per video, never Whisper's."""
+    async def _speech_ready(self) -> Optional[str]:
+        """Reads the video's speech once (the gate's own detector, never Whisper's). None when it is there (or no
+        gate is set), else the sentence every check gets: without the speech, nothing can be checked."""
+        if self.deps.gate is None or self.run.speech is not None:
+            return None
+        try:
+            self.run.speech = await asyncio.to_thread(self.deps.speech)
+        except JobAborted:
+            raise
+        except Exception as e:  # no audio, unreadable audio: nothing can be checked, so nothing passes
+            return f"the audio could not be checked: {str(e)[:120]}"
+        return None
+
+    def _verdict_now(self, cues: List[Cue], lang: str, label: Optional[str] = None,
+                     source: Optional[List[Cue]] = None, timing_from_audio: bool = False) -> Optional[str]:
+        """The gate on `cues` for `lang` (blocking; speech already read): None when it passes, else its sentence."""
         if self.deps.gate is None:
             return None
-        if self.run.speech is None:
-            try:
-                self.run.speech = await asyncio.to_thread(self.deps.speech)
-            except JobAborted:
-                raise
-            except Exception as e:  # no audio, unreadable audio: nothing can be checked, so nothing passes
-                return f"the audio could not be checked: {str(e)[:120]}"
         spans, duration_ms = self.run.speech
         try:
-            v = await asyncio.to_thread(self.deps.gate, cues, spans, lang, label=label, duration_ms=duration_ms,
-                                        source=source, timing_from_audio=timing_from_audio)
+            v = self.deps.gate(cues, spans, lang, label=label, duration_ms=duration_ms, source=source,
+                               timing_from_audio=timing_from_audio)
         except JobAborted:
             raise
         except Exception as e:  # e.g. « no speech detected: sync cannot be measured »: unchecked, so not passed
             return str(e)[:200] or type(e).__name__
         return None if v.passed else (v.reason or "rejected by the quality gate")
+
+    async def _verdict(self, cues: List[Cue], lang: str, label: Optional[str] = None,
+                       source: Optional[List[Cue]] = None, timing_from_audio: bool = False) -> Optional[str]:
+        """None when the gate passes `cues` for `lang`, else its one sentence (Verdict.reason)."""
+        unchecked = await self._speech_ready()
+        if unchecked:
+            return unchecked
+        return await asyncio.to_thread(self._verdict_now, cues, lang, label, source, timing_from_audio)
 
     async def asr(self) -> Source:
         if self.run.asr is None:

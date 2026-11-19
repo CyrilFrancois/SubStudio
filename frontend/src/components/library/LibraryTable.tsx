@@ -2,6 +2,7 @@
 "use client";
 
 import { Fragment, useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import { BadgeCheck, ChevronDown, ChevronRight, Folder, SlidersHorizontal } from 'lucide-react';
 import type { JobOptions, LanguageCoverage, LibraryVideo } from '@/lib/types';
 import { languageName } from '@/lib/languages';
@@ -129,7 +130,15 @@ export default function LibraryTable({ groups, languages, selected, onSelect, ov
                     </span>
                     <span role="cell" className="text-xs text-gray-500 tabular-nums">{duration(video.duration_s)}</span>
                     {coverage.map(c => (
-                      <span role="cell" key={c.language}><CoverageChip coverage={c} /></span>
+                      <span role="cell" key={c.language}>
+                        {c.state === 'passed' ? (
+                          // A validated cell opens its lines in Review.
+                          <Link href={`/review?video=${encodeURIComponent(video.id)}&lang=${encodeURIComponent(c.language)}`}
+                                onClick={e => e.stopPropagation()} className="rounded-md hover:brightness-125 focus-visible:outline focus-visible:outline-indigo-500">
+                            <CoverageChip coverage={c} />
+                          </Link>
+                        ) : <CoverageChip coverage={c} />}
+                      </span>
                     ))}
                     <span role="cell">
                       <button

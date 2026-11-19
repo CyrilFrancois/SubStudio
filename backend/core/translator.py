@@ -1,15 +1,12 @@
 # translator.py — GeminiTranslator: optional cloud backend of the Translator contract. Exports: GeminiTranslator.
 
 import json
-import logging
 import os
 from typing import List
 
 import httpx
 
-from .subtitles import BatchMismatch, CueText, TranslationContext
-
-logger = logging.getLogger("SubStudio.Translator")
+from .subtitles import BatchMismatch, CueText, TranslationContext, TranslationFailed
 
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
@@ -29,14 +26,18 @@ class GeminiTranslator:
     batch_size = 30
 
     def __init__(self, api_key: str = None):
-        self.api_key = api_key or os.getenv("GEMINI_API_KEY", "")
+        self.api_key = (api_key or os.getenv("GEMINI_API_KEY", "")).strip()
+        if not self.api_key:
+            # Checked before the HTTP client exists: without a key there is no translator, so the subtitle text can
+            # never be sent to Google (it was, with an empty key header, until 2026-11-19). make_translator() raises
+            # this at backend start, the same way as an unknown TRANSLATOR.
+            raise TranslationFailed("GEMINI_API_KEY is not set: TRANSLATOR=gemini needs a key "
+                                    "(https://aistudio.google.com/apikey), or leave TRANSLATOR unset for the local one")
         # Benchmarked 2026-11-08 on a 3-block SRT: ~2 s at thinkingLevel "low" vs ~5.5 s at the default.
         # thinkingLevel is a Gemini 3.x field — a 2.5 model override would need thinkingBudget instead.
         self.model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
         self.name = f"gemini:{self.model}"
         self.http = httpx.Client(timeout=120)
-        if not self.api_key:
-            logger.error("GEMINI_API_KEY is not set — every translation request will fail.")
 
     def _generate(self, user_content: str, temperature: float, system_prompt: str = "", schema: dict = None) -> str:
         config = {"temperature": temperature, "thinkingConfig": {"thinkingLevel": "low"}}

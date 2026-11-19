@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 from . import library
 from .config import MEDIA_ROOT, STUB
 from .events_hub import hub
+from .review import flag_cues
 from .job_runner import job_runner
 from .job_store import job_store, overlay
 from .schemas import (CueList, EventFrame, EventFrameDoc, Job, JobCreate, JobCreateResponse, JobEvent,
@@ -117,15 +118,16 @@ async def get_subtitles(video_id: str, lang: str):
     if library.video_path(video_id) is None:
         raise HTTPException(status_code=404, detail="Unknown video id; reload the library")
     if not STUB:
-        raise HTTPException(status_code=501, detail="The cue editor needs the typed cue list and the job store (Phase B).")
-    return _stub().cues(video_id, lang)
+        raise HTTPException(status_code=501, detail="Reading subtitles for review arrives with the job store (workspace-6e, task 12).")
+    # Flags come from the gate's rules here, whatever store served the cues.
+    return flag_cues(_stub().cues(video_id, lang))
 
 
 @router.put("/subtitles/{video_id}/{lang}", response_model=CueList)
 async def put_subtitles(video_id: str, lang: str, body: CueList):
     if not STUB:
-        raise HTTPException(status_code=501, detail="The cue editor needs the typed cue list and the job store (Phase B).")
-    raise HTTPException(status_code=501, detail="Saving cues is not stubbed: nothing would be written.")
+        raise HTTPException(status_code=501, detail="Saving edited subtitles arrives with the job store (workspace-6e, task 12).")
+    raise HTTPException(status_code=501, detail="Saving is not simulated in stub mode: nothing would be written.")
 
 
 # --- Settings and system ---------------------------------------------------------------------

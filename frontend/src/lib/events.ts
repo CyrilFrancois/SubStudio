@@ -1,19 +1,23 @@
-// events.ts — One EventSource on GET /api/events for the whole app; jobs kept by id. Exports: useJobEvents.
+// events.ts — One EventSource on GET /api/events for the whole app: jobs by id, recent log lines per job. Exports: useJobEvents, LIVE_LOG_LIMIT.
 "use client";
 
 import { useEffect, useRef, useState } from 'react';
 import { API_BASE_URL } from './api';
-import type { EventFrame, Job } from './types';
+import type { EventFrame, Job, LogEvent } from './types';
 
 type Connection = 'connecting' | 'open' | 'lost';
+
+/** Live lines kept per job; older ones come from GET /api/jobs/{id}/logs when a panel opens. */
+export const LIVE_LOG_LIMIT = 500;
 
 /**
  * Jobs are full snapshots, so a frame simply replaces the job with that id; a fresh tab gets one
  * frame per unfinished job on connect. `onLibraryChange` fires when a job finished or the backend
  * says coverage changed, so the caller refetches the library instead of guessing.
  */
-export function useJobEvents(onLibraryChange: () => void) {
+export function useJobEvents(onLibraryChange: () => void = () => {}) {
   const [jobs, setJobs] = useState<Record<string, Job>>({});
+  const [logs, setLogs] = useState<Record<string, LogEvent[]>>({});
   const [connection, setConnection] = useState<Connection>('connecting');
   const callback = useRef(onLibraryChange);
   callback.current = onLibraryChange;
@@ -42,6 +46,12 @@ export function useJobEvents(onLibraryChange: () => void) {
         if (before && before !== job.state && ['done', 'failed', 'cancelled'].includes(job.state)) {
           callback.current();
         }
+      } else if (frame.kind === 'log') {
+        const key = frame.job_id ?? '';
+        setLogs(prev => {
+          const next = [...(prev[key] ?? []), frame];
+          return { ...prev, [key]: next.length > LIVE_LOG_LIMIT ? next.slice(-LIVE_LOG_LIMIT) : next };
+        });
       } else if (frame.kind === 'library') {
         callback.current();
       }
@@ -49,5 +59,5 @@ export function useJobEvents(onLibraryChange: () => void) {
     return () => es.close();
   }, []);
 
-  return { jobs, connection };
+  return { jobs, logs, connection };
 }

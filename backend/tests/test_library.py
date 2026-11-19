@@ -75,11 +75,33 @@ def test_substudio_track_carries_its_origin(root):
     assert v.validated and v.marker_languages == ["fr"]
 
 
-def test_count_existing_counts_but_never_validates(root):
+def test_an_existing_subtitle_is_not_checked_yet_until_the_gate_judged_it(root, monkeypatch):
+    # D-0002 (Cyril, 2026-11-19): count_existing ON counts a pre-existing subtitle only once the gate passed it.
     _mkv(root / "ep.mkv", audio_lang="eng", subs=[("eng", "English (SDH)", None)])
+    monkeypatch.setattr(library, "_verdicts", lambda path, st: {})
     v = _scan(["en"], count_existing=True)["ep.mkv"]
-    assert _cells(v) == {"en": ("passed", "existing", "en")}
-    assert not v.validated
+    assert _cells(v) == {"en": ("unchecked", None, "en")}
+    assert v.coverage[0].reason.startswith("not checked yet: en embedded")
+    assert v.tracks[0].counted is False and not v.validated
+
+
+def test_a_subtitle_the_gate_rejected_leaves_the_language_missing(root, monkeypatch):
+    _mkv(root / "ep.mkv", audio_lang="eng", subs=[("eng", "English (SDH)", None)])
+    monkeypatch.setattr(library, "_verdicts", lambda path, st: {"stream:2": library.REJECTED})
+    v = _scan(["en"], count_existing=True)["ep.mkv"]
+    assert _cells(v) == {"en": ("missing", None, "en")}
+    assert v.tracks[0].reason == "the quality check rejected it" and not v.tracks[0].made_by_substudio
+    assert v.coverage[0].reason.startswith("rejected by the quality check: en embedded")
+
+
+def test_count_existing_off_still_counts_a_track_the_gate_kept(root, monkeypatch):
+    # core/provenance: a track the verdict record lists as kept IS SubStudio's own (validated, file left as is),
+    # so it counts like a muxed one; OFF ignores only the subtitles SubStudio has not validated.
+    _mkv(root / "ep.mkv", audio_lang="eng", subs=[("eng", "English (SDH)", None), ("fre", "French", None)])
+    monkeypatch.setattr(library, "_verdicts", lambda path, st: {"stream:2": "kept"})
+    v = _scan(["en", "fr"], count_existing=False)["ep.mkv"]
+    assert _cells(v) == {"en": ("passed", "kept", "en"), "fr": ("missing", None, "fr")}
+    assert v.coverage[1].reason == "ignored: fr embedded"
 
 
 def test_untagged_audio_leaves_ov_to_the_job(root):
@@ -108,7 +130,7 @@ def test_a_sidecar_never_belongs_to_a_video_whose_name_is_its_prefix(root):
     (root / "Aliens.fr.srt").write_text(SRT, encoding="utf-8")
     lib = _scan(["fr"], count_existing=True)
     assert lib["Alien.mkv"].tracks == [] and lib["Alien.mkv"].coverage[0].state == "missing"
-    assert lib["Aliens.mkv"].coverage[0].state == "passed"
+    assert lib["Aliens.mkv"].coverage[0].state == "unchecked"
 
 
 def test_hearing_impaired_flag_is_not_hindi(root):

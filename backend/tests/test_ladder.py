@@ -44,8 +44,10 @@ def make(wanted, existing=(), original=None, fetched=None, preloaded=None, downl
         asr_calls.append(1)
         return cues(ENGLISH), "en"
 
-    def fetch(path, langs, work_dir):
+    def fetch(path, langs, work_dir, **kw):
         fetch_calls.append(sorted(langs))
+        if callable(fetched):  # a scripted search that, like the real one, hands each candidate to the gate
+            return fetched(path, langs, work_dir, **kw)
         return fetched if fetched is not None else FetchResult({})
 
     deps = LadderDeps(translator=Tag(), transcribe=transcribe, load_embedded=lambda i: cues(ENGLISH), fetch=fetch,
@@ -85,10 +87,11 @@ def test_marked_existing_is_kept_and_never_downloaded():
 
 
 def test_unsynced_download_falls_through_with_its_reason():
-    fetched = FetchResult({"fr": Acquired("fr", "fr.srt", "gestdown", False, False)}, frozenset({"podnapisi"}))
+    fetched = FetchResult({}, frozenset({"podnapisi"}),
+                          rejected={"fr": ["gestdown #1: could not be matched to the audio"]})
     run, ladder, asr, _ = make(["fr"], original="en", fetched=fetched)
     cells = go(run, ladder)
-    assert cells["fr"]["attempts"][:2] == ["download: found, but it could not be matched to the audio",
+    assert cells["fr"]["attempts"][:2] == ["download: rejected gestdown #1: could not be matched to the audio",
                                           "translate: no good subtitle in another language"]
     assert cells["fr"]["origin_label"] == "transcribed, translated from en" and asr == [1]
 
@@ -159,7 +162,7 @@ def _retry(run, fetched_now, monkeypatch):
     monkeypatch.setattr("core.ladder.load_file", lambda path: cues(FRENCH))
     calls = []
 
-    def fetch(path, langs, work_dir):
+    def fetch(path, langs, work_dir, **kw):
         calls.append(sorted(langs))
         return fetched_now
     deps = LadderDeps(translator=Tag(), transcribe=lambda: (cues(ENGLISH), "en"), load_embedded=lambda i: [],
@@ -179,8 +182,9 @@ def test_retry_searches_again_after_a_failed_search(monkeypatch):
     assert not any(a.startswith("download") for a in run.cells["fr"].attempts)  # the old failure is not kept
 
 
-def test_retry_does_not_search_again_for_an_unmatched_download(monkeypatch):
-    unmatched = FetchResult({"fr": Acquired("fr", "fr.srt", "gestdown", False, False)})
+def test_retry_does_not_search_again_once_every_candidate_was_judged(monkeypatch):
+    unmatched = FetchResult({}, rejected={"fr": ["gestdown #1: could not be matched to the audio",
+                                                 "gestdown #2: out of sync: shifted +2.4 s from the speech"]})
     run, ladder, _, _ = make(["fr"], original="en", fetched=unmatched)
     go(run, ladder)
     retry, calls = _retry(run, unmatched, monkeypatch)
@@ -202,7 +206,7 @@ def test_retry_searches_with_the_video_as_it_is_now(monkeypatch):
     run.output_path = "v (Sub-EN).mkv"
     retry, _ = _retry(run, FetchResult({}), monkeypatch)
     seen = []
-    retry.deps.fetch = lambda path, langs, work_dir: seen.append(path) or FetchResult({})
+    retry.deps.fetch = lambda path, langs, work_dir, **kw: seen.append(path) or FetchResult({})
     run.cells["fr"].state = CellState.PENDING
     asyncio.run(retry.fill("fr"))
     assert seen == ["v (Sub-EN).mkv"]
@@ -263,6 +267,7 @@ def test_unmarked_existing_counts_when_the_gate_passes_it():
     run, ladder, asr, fetches, reads = gated(["en"], [sdh], original="en")
     cells = go(run, ladder)
     assert cells["en"]["origin"] == "kept" and fetches == [] and ladder.deps.gate.calls[0][:2] == ("en", "en")
+    assert run.judged == {("embedded", "0"): True}       # recorded « kept » after the output step
 
 
 def test_rejected_existing_falls_through_with_the_gate_sentence(monkeypatch):
@@ -280,6 +285,7 @@ def test_rejected_existing_falls_through_with_the_gate_sentence(monkeypatch):
     cells = go(run, ladder)
     assert cells["en"]["attempts"] == ["existing: en embedded rejected: en: 41 % of lines overlap speech (min 85 %)"]
     assert cells["en"]["origin"] == "downloaded" and fetches == [["en"]]
+    assert run.judged == {("embedded", "0"): False}      # recorded « rejected »: the Library says why
 
 
 def test_count_existing_off_never_checks_an_unmarked_subtitle():
@@ -288,14 +294,42 @@ def test_count_existing_off_never_checks_an_unmarked_subtitle():
     go(run, ladder)
     assert run.cells["en"].attempts[0] == "existing: ignored: en embedded"
     assert ("en", "en", False, 9000) not in ladder.deps.gate.calls  # the track itself was never gated
+    assert run.judged == {}                               # never judged: stays « not checked yet »
+
+
+def _search(*paths_per_lang):
+    """A scripted search: for each language, candidate files offered in order to the ladder's gate (accept)."""
+    def fetch(path, langs, work_dir, accept=None, **kw):
+        kept, rejected = {}, {}
+        for lang in langs:
+            for n, p in enumerate(paths_per_lang, start=1):
+                why = accept(lang, p) if accept else None
+                if why:
+                    rejected.setdefault(lang, []).append(f"gestdown #{n}: {why}")
+                    continue
+                kept[lang] = Acquired(lang, p, "gestdown", False, True, 0.1)
+                break
+        return FetchResult(kept, frozenset(), rejected)
+    return fetch
 
 
 def test_rejected_download_is_noted_and_not_used(monkeypatch):
-    fetched = FetchResult({"fr": Acquired("fr", "fr.srt", "gestdown", False, True, 0.1)})
-    run, ladder, _, _, _ = gated(["fr"], reject=("fr",), fetched=fetched, original="en")
+    run, ladder, _, _, _ = gated(["fr"], reject=("fr",), fetched=_search("fr.1.srt"), original="en")
     monkeypatch.setattr("core.ladder.load_file", lambda path: cues(FRENCH))
     cells = go(run, ladder)
-    assert cells["fr"]["attempts"][0] == "download: rejected: fr: 41 % of lines overlap speech (min 85 %)"
+    assert cells["fr"]["attempts"][0] == "download: rejected gestdown #1: fr: 41 % of lines overlap speech (min 85 %)"
+
+
+def test_the_gate_turning_down_the_best_download_lets_the_next_one_in(monkeypatch):
+    # S05E12 (2026-11-19): the best FR landed 2.4 s off after re-timing; the next listed one may fit.
+    files = {"fr.1.srt": "first", "fr.2.srt": "second"}
+    monkeypatch.setattr("core.ladder.load_file", lambda path: [Cue(1, 0, 1500, files[path])] + cues(FRENCH)[1:])
+    run, ladder, asr, _, _ = gated(["fr"], fetched=_search("fr.1.srt", "fr.2.srt"), original="en")
+    ladder.deps.gate = lambda c, *a, **k: _Gate(reject=("fr",) if c[0].text == "first" else ())(c, *a, **k)
+    cells = go(run, ladder)
+    assert cells["fr"]["origin"] == "downloaded" and run.cells["fr"].cues[0].text == "second"
+    assert cells["fr"]["attempts"] == ["download: rejected gestdown #1: fr: 41 % of lines overlap speech (min 85 %)"]
+    assert asr == []                                                   # no transcription: a human subtitle fitted
 
 
 def test_translated_cell_is_gated_against_its_source_and_fails_with_the_sentence():

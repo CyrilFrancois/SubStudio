@@ -14,7 +14,7 @@ from typing import Dict, List, Optional, Tuple
 
 import langcodes
 
-from core.provenance import ORIGIN_TAG, ORIGINS, OV, is_substudio_track, parse_name_marker, track_key
+from core.provenance import ORIGIN_TAG, ORIGINS, OV, REJECTED, is_substudio_track, parse_name_marker, track_key
 
 from .config import MEDIA_ROOT
 from .schemas import LanguageCoverage, LibraryResponse, LibraryVideo, Settings, SubtitleTrack
@@ -199,21 +199,35 @@ def _audio_language(probe: _Probe) -> Optional[str]:
 
 
 def _verdicts(path: str, st: os.stat_result) -> Dict[str, str]:
-    """Subtitles of this exact file (path + mtime + size) that the quality gate accepted and left
-    untouched, as {track_key: origin}. Written by the job store (workspace-64, task « jobs survive a
-    restart »): api/job_store.verdicts, valid only while the file keeps the mtime and size it was judged at."""
+    """The quality gate's verdicts on the subtitles of this exact file (path + mtime + size), as
+    {track_key: origin} for an accepted one (an ORIGINS value) or {track_key: REJECTED} for a refused one.
+    Written by the job store: api/job_store.verdicts, valid only while the file keeps the mtime and size it
+    was judged at. A track absent from the record has not been checked."""
     from .job_store import job_store
     return job_store().verdicts(path, st)
 
 
+# REJECTED (the verdict-record value of a refused subtitle) comes from core/provenance: the pipeline writes it.
+NOT_CHECKED = "not checked yet: the quality check runs when the video is started"
+REJECTED_REASON = "the quality check rejected it"
+
+
 def _judge(track: SubtitleTrack, settings: Settings, record: Dict[str, str]) -> SubtitleTrack:
-    """Decide whether a found track counts as coverage, and say why not when it does not."""
+    """Decide whether a found track counts as coverage, and say why not when it does not.
+
+    D-0002 (Cyril, 2026-11-19): a subtitle this SubStudio did not make counts only once the quality gate
+    passed it, which the verdict record says; until then it is « not checked yet », never present.
+    With count_existing off, it is ignored outright."""
+    accepted = {k: v for k, v in record.items() if v in ORIGINS}
     mine = is_substudio_track(kind=track.kind, title=track.title, stream_index=track.stream_index,
-                              path=track.path, manifest=record)
-    if mine and track.origin is None:
+                              path=track.path, manifest=accepted)
+    key = None
+    try:
         key = track_key(kind=track.kind, stream_index=track.stream_index, path=track.path)
-        if record.get(key) in ORIGINS:
-            track = track.model_copy(update={"origin": record[key]})
+    except ValueError:
+        pass
+    if mine and track.origin is None and accepted.get(key):
+        track = track.model_copy(update={"origin": accepted[key]})
     titled = re.match(r"^SubStudio ([a-z]{2})$", track.title or "")
     if track.language is None:
         reason = "no language tag, so it cannot cover any language"
@@ -223,6 +237,10 @@ def _judge(track: SubtitleTrack, settings: Settings, record: Dict[str, str]) -> 
         reason = "not made by this SubStudio, and Settings does not count existing subtitles"
     elif track.kind == "embedded" and track.codec in ("hdmv_pgs_subtitle", "dvd_subtitle", "dvb_subtitle"):
         reason = "image subtitles cannot be read as text"
+    elif not mine and record.get(key) == REJECTED:
+        reason = REJECTED_REASON
+    elif not mine:
+        reason = NOT_CHECKED
     else:
         reason = None
     return track.model_copy(update={"made_by_substudio": mine, "counted": reason is None, "reason": reason})
@@ -236,15 +254,27 @@ def _coverage(wanted: str, audio: Optional[str], tracks: List[SubtitleTrack], pr
     lang = audio if wanted == OV else wanted
     counted = [t for t in tracks if t.counted and t.language == lang]
     if counted:
+        # Only SubStudio tracks count now (made, or kept through the verdict record); « existing » stays in
+        # the contract for records written before the gate.
         best = next((t for t in counted if t.made_by_substudio), counted[0])
         origin = best.origin if best.made_by_substudio else "existing"
         return LanguageCoverage(language=wanted, resolved=lang, state="passed", origin=origin, path=best.path)
     if probe_error:
         # A track inside the video (ours included) may exist unseen: not « missing ».
         return LanguageCoverage(language=wanted, resolved=lang, state="unknown", reason=probe_error)
+    unchecked = [t for t in tracks if t.language == lang and t.reason == NOT_CHECKED]
+    if unchecked:
+        kinds = " + ".join(sorted({t.kind for t in unchecked}))
+        n = f" ({len(unchecked)})" if len(unchecked) > 1 else ""
+        return LanguageCoverage(language=wanted, resolved=lang, state="unchecked",
+                                reason=f"not checked yet: {lang} {kinds}{n}; the quality check runs when the video is started")
     ignored = [t for t in tracks if not t.counted and t.language == lang]
     reason = None
-    if ignored:
+    rejected = [t for t in ignored if t.reason == REJECTED_REASON]
+    if rejected:
+        kinds = " + ".join(sorted({t.kind for t in rejected}))
+        reason = f"rejected by the quality check: {lang} {kinds}; a new one is made when the video is started"
+    elif ignored:
         kinds = " + ".join(sorted({t.kind for t in ignored}))
         reason = f"ignored: {lang} {kinds}" + (f" ({len(ignored)})" if len(ignored) > 1 else "")
     return LanguageCoverage(language=wanted, resolved=lang, state="missing", reason=reason)

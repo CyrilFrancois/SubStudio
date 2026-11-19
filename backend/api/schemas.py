@@ -14,8 +14,9 @@ LanguageCode = str
 
 # What a cell of the coverage matrix says about one (video, wanted language).
 # Cell vocabulary shared with core/cells.py (workspace-6e): pending | running | passed | failed, plus what only
-# a scan can say: "missing" (nothing usable yet) and "unknown" (ffprobe failed, a track may be unseen).
-CoverageState = Literal["passed", "missing", "pending", "running", "failed", "unknown"]
+# a scan can say: "missing" (nothing usable yet), "unchecked" (a subtitle SubStudio did not make is there, but the
+# quality gate has not judged it yet: D-0002, it never counts before) and "unknown" (ffprobe failed, a track may be unseen).
+CoverageState = Literal["passed", "missing", "unchecked", "pending", "running", "failed", "unknown"]
 # The ladder rung that produced a passed cell (core/acquire/types.Rung values).
 Rung = Literal["existing", "download", "translate", "asr"]
 # How a present subtitle was obtained (D-0002 §3; core/provenance.ORIGINS), or "existing" when it
@@ -113,6 +114,7 @@ class Job(BaseModel):
     video_name: str
     languages: List[LanguageCode]
     state: JobState
+    batch_id: Optional[str] = Field(None, description="Same for every job one POST /api/jobs created: the Queue's overall bar counts them together.")
     position: Optional[int] = Field(None, description="Place in the queue (0 = next); null once started.")
     stages: List[StageProgress]
     created_at: datetime
@@ -161,19 +163,33 @@ class EventFrameDoc(BaseModel):
 
 # --- Subtitles (review screen) ---------------------------------------------------------------
 
+# What the quality gate (core/gate) would hold against ONE line, set by api/review.flag_cues from the gate's own
+# measures and THRESHOLDS, so the Review screen points at the lines that make a track fail.
+CueFlag = Literal["too_fast", "long_line", "broken_text", "duplicate", "untranslated"]
+
+
 class Cue(BaseModel):
     id: int = Field(..., description="Position in the source cue list; the translator keys on it.")
     start_ms: int
     end_ms: int
     text: str
     source_text: Optional[str] = Field(None, description="The cue it was translated from, when translated.")
+    flags: List[CueFlag] = Field(default_factory=list, description="Set by the backend on GET; ignored on PUT.")
+
+
+class CueLimits(BaseModel):
+    """The gate's per-line limits (core/gate THRESHOLDS), sent so the screen can say « over 35 characters a second »."""
+    max_cps: float
+    max_line_chars: int
 
 
 class CueList(BaseModel):
     video_id: str
     language: LanguageCode
     origin: CoverageOrigin
+    from_language: Optional[LanguageCode] = Field(None, description="Language of source_text, when translated.")
     reviewed: bool = False
+    limits: Optional[CueLimits] = Field(None, description="Set by the backend on GET; ignored on PUT.")
     cues: List[Cue]
 
 
