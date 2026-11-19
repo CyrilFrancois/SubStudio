@@ -65,6 +65,9 @@ class Ladder:
     def __init__(self, run: VideoRun, deps: LadderDeps):
         self.run, self.deps = run, deps
         self._searched = False  # set by human(): this ladder ran rungs 1–2 itself, so fill() never searches again
+        # Our own tracks that passed rung 1 with lines still in the source language (ExistingSub.untranslated): fill()
+        # re-translates only those lines (_repair).
+        self._partial: Dict[str, Tuple[ExistingSub, List[Cue]]] = {}
 
     # --- bookkeeping -------------------------------------------------------------------------------------------
     def _note(self, lang: str, text: str) -> None:
@@ -96,6 +99,15 @@ class Ladder:
                 cues, why = await self._existing(step.source)
                 if cues:
                     self._accept(lang, cues, Rung.EXISTING)
+                    left = step.source.untranslated
+                    if left and lang in self.run.cells:
+                        # Kept, and a source for the others, but its cell goes on to fill(): a line the translator
+                        # refused once (SUBSTUDIO_UNTRANSLATED) is tried again rather than left forever.
+                        self._partial[lang] = (step.source, cues)
+                        self.run.cells[lang].state = CellState.PENDING
+                        self._note(lang, f"existing: {lang} kept, {len(left)} line{'s' if len(left) > 1 else ''} "
+                                         f"still in {step.source.from_language or 'the source language'}: "
+                                         f"translating {'them' if len(left) > 1 else 'it'} again")
                     break
                 self._note(lang, f"existing: {why}")
             if lang not in self.run.human and any(s.rung == Rung.DOWNLOAD for s in plan.steps):
@@ -189,6 +201,9 @@ class Ladder:
         failed or found nothing: a daily quota resets and sites come back. A download that was found but could not
         be matched to the audio is not searched again: the same file would come back."""
         cell, plan = self.run.cells[lang], self.run.plans[lang]
+        if lang in self._partial:
+            await self._repair(lang, on_batch)
+            return
         if await self._search_again(lang):
             return
         for step in plan.steps:
@@ -219,11 +234,35 @@ class Ladder:
         cell.state = CellState.FAILED
         cell.reason = cell.attempts[-1] if cell.attempts else "no rung could produce this language"
 
-    async def _produce(self, cell, source: Source, on_batch) -> bool:
+    async def _repair(self, lang: str, on_batch) -> None:
+        """Our track passed rung 1 with lines left in its source language: keep every other line as shipped and send
+        only those again, from that language's subtitle as it passed in this run, then gate the whole. The cell never
+        ends worse than the track it had: when the retry cannot run or fails, the track is kept as it was."""
+        sub, cues = self._partial.pop(lang)
+        cell, src_lang = self.run.cells[lang], sub.from_language
+        source = self.run.human.get(src_lang) if src_lang and src_lang != lang else None
+        if source is None:
+            why = f"no good {src_lang or 'source-language'} subtitle in this run"
+        elif len(source.cues) != len(cues) or any((a.start_ms, a.end_ms) != (b.start_ms, b.end_ms)
+                                                  for a, b in zip(source.cues, cues)):
+            # The tag's positions name lines of the track as it was translated; another source would mislabel them.
+            why = f"the {src_lang} subtitle no longer matches it line for line"
+        else:
+            left = set(sub.untranslated)
+            known = {s.id: c.text for pos, (s, c) in enumerate(zip(source.cues, cues), start=1) if pos not in left}
+            if await self._produce(cell, source, on_batch, known=known):
+                return
+            why = cell.reason
+        self._note(lang, f"existing: the {len(sub.untranslated)} line(s) still in {src_lang} were not translated "
+                         f"again ({why}); kept as it was")
+        cell.cues, cell.origin, cell.state, cell.reason = cues, Origin(Rung.EXISTING), CellState.PASSED, ""
+
+    async def _produce(self, cell, source: Source, on_batch, known: Optional[Dict[int, str]] = None) -> bool:
         """Translate (or keep, for a transcript in the cell's language) from `source`, wrap the lines as they will
         be written, then gate them. False with cell.reason set when either step fails."""
         await asyncio.to_thread(produce_cell, cell, source, self.deps.translator,
-                                on_batch=on_batch, check_abort=self.deps.check_abort, cache=self.deps.artifacts)
+                                on_batch=on_batch, check_abort=self.deps.check_abort, cache=self.deps.artifacts,
+                                known=known)
         if cell.state != CellState.PASSED:
             return False
         # Wrapped at the gate's own line limit: one number, so SubStudio's wrapping can never fail its own gate.

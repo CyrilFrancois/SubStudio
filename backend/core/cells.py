@@ -142,10 +142,12 @@ class VideoRun:
 def produce_cell(cell: Cell, source: Source, translator: Translator,
                  on_batch: Optional[Callable[[int, int], None]] = None,
                  check_abort: Optional[Callable[[], None]] = None,
-                 cache: Optional[ArtifactCache] = None) -> None:
+                 cache: Optional[ArtifactCache] = None, known: Optional[Dict[int, str]] = None) -> None:
     """Fills one cell from the source: kept as is when it is already in that language, else translated.
     Sets PASSED with its origin, or FAILED with the one-sentence reason. JobAborted propagates.
-    With `cache` (core/artifacts), lines translated by an earlier run are reused and each batch is kept."""
+    With `cache` (core/artifacts), lines translated by an earlier run are reused and each batch is kept.
+    `known` ({source cue id: text}) are lines already translated in the file (a partial track, ladder): only the
+    others are sent; they win over the cache, being what shipped."""
     cell.state, cell.reason, cell.cues, cell.reviewed = CellState.RUNNING, "", None, False
     cell.left_in_source = []
     if source.language == cell.language:
@@ -161,7 +163,7 @@ def produce_cell(cell: Cell, source: Source, translator: Translator,
         # is named here, and the gate's « untranslated » check judges the whole cell (core/subtitles/translate.py).
         cell.cues = translate_cues(source.cues, cell.language, source.context, translator,
                                    on_batch=on_batch, check_abort=check_abort, left_in_source=left,
-                                   known=cache.load_lines(key) if cache else None,
+                                   known={**((cache.load_lines(key) or {}) if cache else {}), **(known or {})} or None,
                                    on_texts=(lambda texts: cache.save_lines(key, texts)) if cache else None)
     except TranslationFailed as e:
         cell.state, cell.reason = CellState.FAILED, str(e)

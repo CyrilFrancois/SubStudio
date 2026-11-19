@@ -21,6 +21,10 @@ class ExistingSub:
     ref: str                 # sidecar path, or the embedded stream index as text
     text: bool = True        # False for PGS/VobSub: watchable, but not translatable without OCR
     marked: bool = False     # made by the current SubStudio (core/provenance.is_substudio_track): evaluated first
+    # Our own translated track's tags (core/provenance UNTRANSLATED_TAG, FROM_TAG): the positions (1..n) of its lines
+    # still in the source language, and that language. Rung 1 keeps the rest and re-translates only those (ladder).
+    untranslated: Tuple[int, ...] = ()
+    from_language: Optional[str] = None
 
 
 @dataclass(frozen=True)
