@@ -2,10 +2,10 @@
 "use client";
 
 import React, { useState, useMemo } from 'react';
-import { useStudio } from '@/lib/studio-context';
+import { useStudio } from '@/legacy/lib/studio-context';
 import VideoCard from './VideoCard';
 import { Ghost, ChevronRight, ChevronDown, Folder, Loader2 } from 'lucide-react';
-import { VideoFile } from '@/lib/types';
+import { VideoFile } from '@/legacy/lib/types';
 
 interface VideoListProps {
   videos: VideoFile[];

@@ -8,7 +8,6 @@ what is missing: never a crash, never a made-up value.
 """
 
 import logging
-import os
 from pathlib import Path
 from typing import List, Optional
 
@@ -21,9 +20,10 @@ logger = logging.getLogger("SubStudio.Context")
 
 
 def state_dir() -> Path:
-    """Where SubStudio keeps local state: SUBSTUDIO_STATE_DIR, else backend/.state (gitignored)."""
-    configured = os.getenv("SUBSTUDIO_STATE_DIR", "").strip()
-    return Path(configured) if configured else Path(__file__).resolve().parents[2] / ".state"
+    """The context cache's folder, inside SubStudio's one state dir (api/config.STATE_DIR: SUBSTUDIO_STATE_DIR,
+    default backend/state, gitignored, never inside the library)."""
+    from api.config import STATE_DIR
+    return Path(STATE_DIR) / "context"
 
 
 # A title is translated (« Captain » → « Capitaine »), so it never joins the names to keep.

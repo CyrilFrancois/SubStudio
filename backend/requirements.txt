@@ -30,3 +30,7 @@ ffsubsync==0.5.1
 # System & Utilities
 python-dotenv
 httpx
+
+# UI API (backend/api): ISO 639 normalisation, CPU/RAM for /api/system
+langcodes
+psutil

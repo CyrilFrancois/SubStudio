@@ -145,3 +145,10 @@ def test_names_from_the_cues_join_the_glossary(tmp_path):
     cues = [cue(1, "Where is Patience?"), cue(2, "Ask Patience.")]
     ctx = get_context(EPISODE, cues=cues, client=client(tmp_path, []))
     assert "Patience" in ctx.glossary
+
+
+def test_the_cache_lives_in_substudios_one_state_dir(monkeypatch, tmp_path):
+    import api.config
+    from core.context import state_dir
+    monkeypatch.setattr(api.config, "STATE_DIR", tmp_path / "state")
+    assert state_dir() == tmp_path / "state" / "context"
