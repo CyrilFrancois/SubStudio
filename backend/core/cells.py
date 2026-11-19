@@ -16,6 +16,7 @@ from enum import Enum
 from typing import Callable, Dict, List, Optional, Tuple
 
 from .acquire.types import LanguagePlan, Rung
+from .artifacts import ArtifactCache
 from .subtitles import Cue, TranslationContext, TranslationFailed, Translator, translate_cues
 
 
@@ -125,9 +126,11 @@ class VideoRun:
 
 def produce_cell(cell: Cell, source: Source, translator: Translator,
                  on_batch: Optional[Callable[[int, int], None]] = None,
-                 check_abort: Optional[Callable[[], None]] = None) -> None:
+                 check_abort: Optional[Callable[[], None]] = None,
+                 cache: Optional[ArtifactCache] = None) -> None:
     """Fills one cell from the source: kept as is when it is already in that language, else translated.
-    Sets PASSED with its origin, or FAILED with the one-sentence reason. JobAborted propagates."""
+    Sets PASSED with its origin, or FAILED with the one-sentence reason. JobAborted propagates.
+    With `cache` (core/artifacts), lines translated by an earlier run are reused and each batch is kept."""
     cell.state, cell.reason, cell.cues, cell.reviewed = CellState.RUNNING, "", None, False
     if source.language == cell.language:
         rung = Rung.ASR if source.rung == Rung.ASR else Rung.EXISTING
@@ -136,11 +139,14 @@ def produce_cell(cell: Cell, source: Source, translator: Translator,
     rung = Rung.ASR if source.rung == Rung.ASR else Rung.TRANSLATE
     cell.origin = Origin(rung, source.language)
     left: Dict[int, str] = {}
+    key = cache.lines_key(source.cues, cell.language, translator.name, source.context) if cache else None
     try:
         # One cue the model keeps answering wrongly no longer costs the language: it stays in the source language,
         # is named here, and the gate's « untranslated » check judges the whole cell (core/subtitles/translate.py).
         cell.cues = translate_cues(source.cues, cell.language, source.context, translator,
-                                   on_batch=on_batch, check_abort=check_abort, left_in_source=left)
+                                   on_batch=on_batch, check_abort=check_abort, left_in_source=left,
+                                   known=cache.load_lines(key) if cache else None,
+                                   on_texts=(lambda texts: cache.save_lines(key, texts)) if cache else None)
     except TranslationFailed as e:
         cell.state, cell.reason = CellState.FAILED, str(e)
         return

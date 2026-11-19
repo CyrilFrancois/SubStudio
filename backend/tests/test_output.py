@@ -12,7 +12,8 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from bench.media import ffmpeg, probe  # noqa: E402
 from core.output import OutputError, marked_name, update_in_place  # noqa: E402
-from core.output import inplace  # noqa: E402
+from core.output import inplace, media, verify  # noqa: E402
+from core.jobs import JobAborted  # noqa: E402
 from core.subtitles import Cue  # noqa: E402
 
 SECONDS = 5
@@ -94,16 +95,16 @@ def test_nothing_new_leaves_the_file_untouched_and_unrenamed(tmp_path):
 
 def test_mkv_gets_new_tracks_marker_and_keeps_existing(tmp_path):
     src = _mkv_with_sdh(tmp_path)
-    av_before = inplace._signature(inplace._probe(src))
+    av_before = media._signature(media._probe(src))
     result = _upd(src, {"fr": FR}, ["en", "fr"])
 
     assert result.status == "updated" and result.marker == "(Sub-EN,FR)"
     assert result.path.name == "Ghosts S05E01 (Sub-EN,FR).mkv"
     assert not src.exists() and _no_temp(tmp_path)
     assert sorted(p.name for p in tmp_path.iterdir()) == [result.path.name]
-    assert inplace._signature(inplace._probe(result.path)) == av_before
+    assert media._signature(media._probe(result.path)) == av_before
     assert _subs(result.path) == [("subrip", "eng", "English (SDH)"), ("subrip", "fre", "SubStudio fr")]
-    assert inplace._decoded_cue_count(result.path, 1) == 3
+    assert verify._decoded_cue_count(result.path, 1) == 3
 
 
 def test_rerun_replaces_our_track_and_marker_never_stacks(tmp_path):
@@ -112,14 +113,14 @@ def test_rerun_replaces_our_track_and_marker_never_stacks(tmp_path):
     assert again.path.name == "Ghosts S05E01 (Sub-EN,FR,DE).mkv" and not first.exists()
     subs = _subs(again.path)
     assert [t for _, _, t in subs] == ["English (SDH)", "SubStudio fr", "SubStudio de"]
-    assert inplace._decoded_cue_count(again.path, 1) == 2   # the new fr, not the old one
+    assert verify._decoded_cue_count(again.path, 1) == 2   # the new fr, not the old one
 
 
 def test_same_name_rerun_swaps_atomically_onto_the_source(tmp_path):
     first = _upd(_mkv_with_sdh(tmp_path), {"fr": FR}, ["en", "fr"]).path
     again = _upd(first, {"fr": FR[:1]}, ["en", "fr"])
     assert again.path == first and first.exists() and _no_temp(tmp_path)
-    assert inplace._decoded_cue_count(first, 1) == 1
+    assert verify._decoded_cue_count(first, 1) == 1
 
 
 def test_mp4_becomes_mkv_and_its_mov_text_survives_as_srt(tmp_path):
@@ -133,7 +134,7 @@ def test_cues_past_the_end_are_dropped_and_counted_right(tmp_path):
     src = _mkv_with_sdh(tmp_path)
     late = FR + [Cue(4, 6000, 7000, "Après la fin.")]
     result = _upd(src, {"fr": late}, ["en", "fr"])
-    assert inplace._decoded_cue_count(result.path, 1) == 3
+    assert verify._decoded_cue_count(result.path, 1) == 3
 
 
 # ---------------------------------------------------------------- failures leave the source byte-identical
@@ -242,19 +243,19 @@ def _mkv_with_chapters(folder: Path) -> Path:
 
 def test_cover_art_survives_mp4_to_mkv(tmp_path):
     src = _mp4_with_cover(tmp_path)
-    assert inplace._signature(inplace._probe(src))["covers"] == 1     # the fixture really has a cover
+    assert media._signature(media._probe(src))["covers"] == 1     # the fixture really has a cover
     result = _upd(src, {"fr": FR}, ["fr"])
-    assert inplace._signature(inplace._probe(result.path))["covers"] == 1
+    assert media._signature(media._probe(result.path))["covers"] == 1
     again = _upd(result.path, {"de": EN}, ["fr", "de"])     # an MKV cover survives a second swap too
-    sig = inplace._signature(inplace._probe(again.path))
+    sig = media._signature(media._probe(again.path))
     assert sig["covers"] == 1 and [c for c, _ in sig["video"]] == ["mpeg4"]
 
 
 def test_chapters_survive(tmp_path):
     src = _mkv_with_chapters(tmp_path)
-    assert inplace._signature(inplace._probe(src))["chapters"] == 2
+    assert media._signature(media._probe(src))["chapters"] == 2
     result = _upd(src, {"fr": FR}, ["fr"])
-    assert inplace._signature(inplace._probe(result.path))["chapters"] == 2
+    assert media._signature(media._probe(result.path))["chapters"] == 2
 
 
 def test_lost_existing_subtitle_fails_verify(tmp_path, monkeypatch):
@@ -300,7 +301,7 @@ def test_target_appearing_during_the_update_is_never_overwritten(tmp_path, monke
     assert other.read_bytes() == b"arrived meanwhile" and _sha(src) == before and _no_temp(tmp_path)
 
 
-@pytest.mark.parametrize("exc", [KeyboardInterrupt, lambda: inplace.JobAborted("x")])
+@pytest.mark.parametrize("exc", [KeyboardInterrupt, lambda: JobAborted("x")])
 def test_interrupt_or_cancel_leaves_source_byte_identical(tmp_path, monkeypatch, exc):
     src = _mkv_with_sdh(tmp_path)
     before = _sha(src)
@@ -309,7 +310,7 @@ def test_interrupt_or_cancel_leaves_source_byte_identical(tmp_path, monkeypatch,
         raise exc()
 
     monkeypatch.setattr(inplace, "_verify", boom)
-    with pytest.raises((KeyboardInterrupt, inplace.JobAborted)):
+    with pytest.raises((KeyboardInterrupt, JobAborted)):
         _upd(src, {"fr": FR}, ["en", "fr"])
     _assert_source_intact(src, before)
 
@@ -339,7 +340,7 @@ def test_origin_is_recorded_on_each_new_track(tmp_path):
     result = update_in_place(src, {"fr": FR, "de": EN}, ["en", "fr", "de"],
                              origins={"fr": "downloaded", "de": "transcribed"})
     tags = {s.get("tags", {}).get("title"): {k.upper(): v for k, v in s.get("tags", {}).items()}
-            for s in inplace._probe(result.path)["streams"] if s["codec_type"] == "subtitle"}
+            for s in media._probe(result.path)["streams"] if s["codec_type"] == "subtitle"}
     assert tags["SubStudio fr"]["SUBSTUDIO_ORIGIN"] == "downloaded"
     assert tags["SubStudio de"]["SUBSTUDIO_ORIGIN"] == "transcribed"
     assert "SUBSTUDIO_ORIGIN" not in tags["English (SDH)"]

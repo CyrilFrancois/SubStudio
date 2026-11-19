@@ -64,7 +64,8 @@ function tooltip(c: LanguageCoverage): string {
     failed: `${lang} failed`,
     unknown: `Cannot tell whether ${lang} subtitles exist`,
   }[c.state];
-  return c.reason ? `${base}. ${c.reason}` : base;
+  const reviewed = c.state === 'passed' && c.reviewed ? '. Checked by a person in Review' : '';
+  return c.reason ? `${base}${reviewed}. ${c.reason}` : `${base}${reviewed}`;
 }
 
 export default function CoverageChip({ coverage }: { coverage: LanguageCoverage }) {
@@ -82,6 +83,7 @@ export default function CoverageChip({ coverage }: { coverage: LanguageCoverage 
       )}
       {ignored && <span className="text-gray-500">· old ignored</span>}
       {rejected && <span className="text-red-300">· old rejected</span>}
+      {coverage.state === 'passed' && coverage.reviewed && <span className="text-emerald-200/80">· reviewed</span>}
     </span>
   );
 }

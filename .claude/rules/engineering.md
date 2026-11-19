@@ -212,9 +212,8 @@ Screens of D-0002 / ux-review §2, built on the UI API (`backend/api`, below):
 - `src/lib/api.gen.ts` — **generated** from the backend's OpenAPI (`npm run gen:types`); `types.ts`
   only aliases it. Never hand-write a backend shape. `src/lib/api.ts` — REST client (every failure
   throws the backend's sentence). `src/lib/events.ts` — the one `GET /api/events` stream.
-- `src/app/legacy/page.tsx` + `src/legacy/` — the previous dashboard on `/api/process`, kept whole
-  until the queue screen and the job store exist; delete both together then. A page module exports
-  only the page: the App Router fails `next build` on any other export (hence `legacy/lib/studio-context.tsx`).
+- A page module exports only the page: the App Router fails `next build` on any other export. (The old
+  dashboard on `/api/process` was deleted on 2026-11-19 once Queue and Review covered it.)
 
 ### API contracts
 
@@ -235,7 +234,7 @@ Videos are addressed by `LibraryVideo.id` (hash of the path), never by the path 
 | `GET /api/library` | Every video under `SUBSTUDIO_MEDIA_ROOT` × every wanted language: `passed` (with origin) / `missing` / `unchecked` (a subtitle SubStudio did not make, not judged by the gate yet: it counts only once the job store's verdict record passes it, D-0002) / `pending` / `running` / `failed` / `unknown` (ffprobe failed). ffprobe cached by path+mtime+size. What counts as ours: `core/provenance.py`, the one rule. |
 | `GET/PUT /api/settings` | `{languages, count_existing}`, JSON under `SUBSTUDIO_STATE_DIR`, written atomically. |
 | `POST/GET /api/jobs`, `DELETE /api/jobs/{id}`, `GET /api/events` | The job store (SQLite) or, with `SUBSTUDIO_API_STUB=1`, simulated jobs. `/api/events` is one SSE stream, frames discriminated by `kind` (`job`, `log` with the backend's `ts`, `library`). |
-| `GET/PUT /api/subtitles/{id}/{lang}` | `CueList`; GET adds each line's `flags` and the gate's `limits` (`api/review.flag_cues`). Stub only for now (PUT never simulated); otherwise 501 until workspace-6e serves them from the job store (task 12). |
+| `GET/PUT /api/subtitles/{id}/{lang}` | `CueList`; GET adds each line's `flags` and the gate's `limits` (`api/review.flag_cues`). GET reads the video's « SubStudio <lang> » track (`api/subtitles.py`); `source_text` only while the run is in memory. PUT saves the text only, through the verified swap, tags the track `SUBSTUDIO_REVIEWED=yes` (the Library shows « reviewed »), and may rename a file that had no marker: the response's `video_id` is then the new one. 404/409/422/500 each carry one sentence. Stub: a sample, PUT not simulated. |
 | `GET /api/system` | `stub`, media root, CPU/RAM against the D-0001 budget. |
 
 **SSE frames are unnamed** — everything arrives on the default `message` event with a `type`
@@ -254,7 +253,7 @@ boolean, not a mode.
 `LLAMA_MODEL_PATH`, `LLAMA_GPU_LAYERS`, `LLAMA_PORT` (defaults under `%LOCALAPPDATA%\SubStudio\`);
 only with `TRANSLATOR=gemini`: `GEMINI_API_KEY`, optional `GEMINI_MODEL`
 (default `gemini-3.8-flash`; must be a 3.x model because the request sends `thinkingLevel`),
-`NEXT_PUBLIC_MEDIA_PATH`, `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_LANGUAGES` (legacy dashboard only),
+`NEXT_PUBLIC_MEDIA_PATH`, `NEXT_PUBLIC_API_URL`,
 `WHISPER_MODEL`. UI API: `SUBSTUDIO_MEDIA_ROOT` (default `/data`), `SUBSTUDIO_STATE_DIR` (default
 `backend/state`, gitignored; never inside the library), `SUBSTUDIO_API_STUB=1` (simulated jobs,
 the UI shows a banner).

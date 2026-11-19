@@ -82,6 +82,16 @@ def test_one_cue_left_on_a_short_file_does_not_cost_the_language():
     assert [c.text for c in out] == ["x", "x", "line 3", "x", "x"] and list(left) == [3]
 
 
+def test_a_cue_left_in_the_source_language_is_never_cached_so_a_rerun_sends_it_again():
+    fake = Fake(behave=lambda cues: [{"id": c["id"], "text": "x"} for c in cues if c["id"] != 6])
+    saved = []
+    run(fake, left_in_source={}, on_texts=saved.append)
+    assert 6 not in saved[-1] and len(saved[-1]) == 9
+    fake = Fake()
+    out = run(fake, known=saved[-1], left_in_source={})
+    assert [ids for ids, _ in fake.calls] == [[6]] and out[5].text == "LINE 6"
+
+
 def test_empty_text_is_a_wrong_answer():
     with pytest.raises(TranslationFailed, match="cue 2"):
         run(Fake(behave=lambda cues: [{"id": c["id"], "text": "" if c["id"] == 2 else "x"} for c in cues]))
