@@ -1,4 +1,4 @@
-# subtitles.py — The Review screen's cues: read from the video's SubStudio track, edited text written back by the verified swap. Exports: SubtitleError, get_cue_list, save_cue_list.
+# subtitles.py — The Review screen's cues: read from the video's SubStudio track, edited text written back by the verified swap. Exports: SubtitleError, editing, get_cue_list, save_cue_list.
 """GET/PUT /api/subtitles/{video_id}/{lang} on the real data (routes.py calls these through asyncio.to_thread).
 
 - The cues are the video's « SubStudio <lang> » track (core/output.read_track): what shipped, after a restart too.
@@ -16,13 +16,15 @@
 
 import logging
 import os
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from core.acquire.types import Rung
 from core.cells import CellState, VideoRun
-from core.output import OutputError, current_path, read_track, update_in_place
+from core.jobs import job_registry
+from core.output import OutputBusy, OutputError, current_path, read_track, update_in_place
 from core.provenance import OV, ORIGINS, parse_name_marker
 from core.subtitles import Cue
 
@@ -58,11 +60,27 @@ def _run_for(orch, path: str) -> Optional[VideoRun]:
 
 
 def _busy(orch, path: str) -> bool:
+    """A job holds this video: running (active_jobs) or registered by a batch that has not reached it yet."""
     runs = getattr(orch, "runs", {})
-    for fid in getattr(orch, "active_jobs", ()):
+    for fid in [*getattr(orch, "active_jobs", ()), *job_registry.active_ids()]:
         if _same(fid, path) or (fid in runs and _same(current_path(runs[fid]), path)):
             return True
     return False
+
+
+@contextmanager
+def editing(orch, path: str):
+    """Holds the video for one save. Enter it ON THE EVENT LOOP, before any await: the check and the claim then
+    happen with no request in between. The claim is the video's path in orchestrator.active_jobs, the set every
+    starter already refuses on (/api/process, /api/retry, the job runner's _busy), so no job can start on any video
+    while the swap runs, and the kept run is only touched under the claim."""
+    if _busy(orch, path):
+        raise SubtitleError(409, "A job is running or queued on this video: edit it when the job has finished.")
+    orch.active_jobs.add(path)
+    try:
+        yield
+    finally:
+        orch.active_jobs.discard(path)
 
 
 def _resolve(path: str, lang: str) -> str:
@@ -140,10 +158,9 @@ def _edited_texts(body: CueList, current: List[Cue]) -> Dict[int, str]:
 
 
 def save_cue_list(orch, video_id: str, path: str, lang: str, body: CueList) -> CueList:
+    """Call inside editing(orch, path), entered on the event loop: that claim is what keeps jobs off this video."""
     if body.video_id != video_id or body.language != lang:
         raise SubtitleError(422, "The body is for another video or language than the URL.")
-    if _busy(orch, path):
-        raise SubtitleError(409, "A job is running on this video: edit it when the job has finished.")
     code = _resolve(path, lang)
     track = _read(path, code)
     if track.origin not in WRITABLE_ORIGINS:
@@ -159,9 +176,10 @@ def save_cue_list(orch, video_id: str, path: str, lang: str, body: CueList) -> C
         validated.append(code)
     try:
         result = update_in_place(Path(path), {code: new}, validated, origins={code: track.origin}, reviewed={code})
+    except OutputBusy as e:
+        raise SubtitleError(409, f"Not saved, the video is unchanged: {e}.")
     except OutputError as e:
-        status = 409 if "already being updated" in str(e) else 500
-        raise SubtitleError(status, f"Not saved, the video is unchanged: {e}.")
+        raise SubtitleError(500, f"Not saved, the video is unchanged: {e}.")
 
     run = _run_for(orch, path)
     if run is not None:

@@ -12,10 +12,11 @@ from fastapi.testclient import TestClient
 from api import library, routes
 from api.job_runner import job_runner
 from api.schemas import CueList
-from api.subtitles import SubtitleError, get_cue_list, save_cue_list
+from api.subtitles import SubtitleError, editing, get_cue_list, save_cue_list
 from bench.media import ffmpeg
 from core.acquire.types import Rung
 from core.cells import Cell, CellState, Origin, Source, VideoRun
+from core.jobs import job_registry
 from core.output import read_track, update_in_place, write_run
 from core.subtitles import Cue, TranslationContext
 
@@ -150,14 +151,46 @@ def test_put_refuses_anything_but_text_and_leaves_the_video_byte_identical(tmp_p
     assert _sha(p) == before
 
 
-def test_put_refuses_while_a_job_runs_on_that_video(tmp_path):
+def test_a_save_claims_the_video_and_a_running_or_queued_job_refuses_it(tmp_path):
     p = _video(tmp_path)
     run = _run(p)
+    with pytest.raises(SubtitleError) as e:                     # running: in active_jobs under its queued path
+        with editing(_orch(run, active={run.path}), str(p)):
+            pass
+    assert e.value.status == 409
+    job_registry.register(run.path)                             # queued by a batch that has not reached it yet
+    try:
+        with pytest.raises(SubtitleError):
+            with editing(_orch(run), str(p)):
+                pass
+    finally:
+        job_registry.release(run.path)
+    orch = _orch(run)
+    with editing(orch, str(p)):
+        assert orch.active_jobs == {str(p)}                     # every job starter refuses while this is non-empty
+    assert orch.active_jobs == set()
+
+
+def test_put_refuses_while_a_job_runs_on_that_video(tmp_path, monkeypatch):
+    p = _video(tmp_path)
+    run = _run(p)
+    monkeypatch.setattr(job_runner, "_orch", _orch(run, active={run.path}))
+    vid = library.remember(str(p))
+    client = TestClient(_app(routes))
     before = _sha(p)
-    listing = get_cue_list(_orch(run), "v1", str(p), "fr")
-    with pytest.raises(SubtitleError) as e:
-        save_cue_list(_orch(run, active={run.path}), "v1", str(p), "fr", _body(listing, c1="Salut."))
-    assert e.value.status == 409 and _sha(p) == before
+    body = client.get(f"/api/subtitles/{vid}/fr").json()
+    body["cues"][0]["text"] = "Salut."
+    put = client.put(f"/api/subtitles/{vid}/fr", json=body)
+    assert put.status_code == 409 and "job" in put.json()["detail"] and _sha(p) == before
+    assert job_runner.orchestrator.active_jobs == {run.path}    # the refused claim took and released nothing
+
+
+def test_an_id_whose_file_was_renamed_answers_404(tmp_path, monkeypatch):
+    p = _video(tmp_path)
+    monkeypatch.setattr(job_runner, "_orch", _orch())
+    vid = library.remember(str(p))
+    p.rename(p.with_name("Renamed.mkv"))
+    assert TestClient(_app(routes)).get(f"/api/subtitles/{vid}/ov").status_code == 404
 
 
 def test_put_with_nothing_new_on_a_reviewed_track_does_not_rewrite(tmp_path):

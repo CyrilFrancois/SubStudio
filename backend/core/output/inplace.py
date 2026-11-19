@@ -1,4 +1,4 @@
-# inplace.py — The verified swap: put new subtitle tracks INTO the source video and rename it with a (Sub-EN,FR) marker, never losing the source. Exports: update_in_place, subtitle_streams, marked_name, OutputResult, OutputError.
+# inplace.py — The verified swap: put new subtitle tracks INTO the source video and rename it with a (Sub-EN,FR) marker, never losing the source. Exports: update_in_place, subtitle_streams, marked_name, OutputResult, OutputError, OutputBusy.
 """
 Cyril's rule (doc/user-process.md §4, D-0002; CLAUDE.md « Forbidden »): a source video is replaced only by this swap.
 
@@ -49,6 +49,10 @@ _TEXT_TO_SRT = {"mov_text"}
 
 class OutputError(RuntimeError):
     """The swap did not happen; the source is unchanged (the message says why, in one sentence)."""
+
+
+class OutputBusy(OutputError):
+    """Another swap of the same video is running in this process; nothing was done (callers answer « busy »)."""
 
 
 @dataclass(frozen=True)
@@ -377,7 +381,7 @@ def update_in_place(
 
     lock = _lock_for(source)
     if not lock.acquire(blocking=False):
-        raise OutputError(f"{source.name} is already being updated by another job")
+        raise OutputBusy(f"{source.name} is already being updated by another job")
     try:
         return _swap(source, new, validated, {l: origin_of[l] for l in new}, {_iso1(l) for l in reviewed} & set(new),
                      job)

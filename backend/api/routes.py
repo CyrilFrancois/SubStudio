@@ -117,6 +117,9 @@ def _video(video_id: str) -> str:
     path = library.video_path(video_id)
     if path is None:
         raise HTTPException(status_code=404, detail="Unknown video id; reload the library")
+    if not STUB and not os.path.isfile(path):
+        # A job or an earlier save renamed it since the last scan: the id names a file that is gone.
+        raise HTTPException(status_code=404, detail="This video was renamed or moved since the library was read; reload the library")
     return path
 
 
@@ -149,7 +152,14 @@ async def put_subtitles(video_id: str, lang: str, body: CueList):
     path = _video(video_id)
     if STUB:
         raise HTTPException(status_code=501, detail="Saving is not simulated in stub mode: nothing would be written.")
-    return flag_cues(await _cues(subtitles.save_cue_list, video_id, path, lang, body))
+    if not job_runner.connected:
+        raise HTTPException(status_code=503, detail=NOT_CONNECTED)
+    try:
+        # Entered here, on the event loop, before the first await: no job can start between the check and the claim.
+        with subtitles.editing(job_runner.orchestrator, path):
+            return flag_cues(await _cues(subtitles.save_cue_list, video_id, path, lang, body))
+    except subtitles.SubtitleError as e:      # the claim's refusal (a job holds the video)
+        raise HTTPException(status_code=e.status, detail=e.detail)
 
 
 # --- Settings and system ---------------------------------------------------------------------
