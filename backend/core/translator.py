@@ -68,6 +68,9 @@ class GeminiTranslator:
             raise RuntimeError("Gemini returned an empty text")
         return text
 
+    def unload(self) -> None:
+        """Part of the backend contract main.py calls after translating; a cloud backend holds no local model."""
+
     def get_context_profile(self, filename: str) -> str:
         """A 'story bible' guessed from the filename: names, genders, tone. Empty-safe: a failure gives a neutral note."""
         logger.info(f"AI searching filename context: {filename}")

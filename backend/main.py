@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Any, Set
 # Core Imports
 from core.scanner import VideoScanner
 from core.transcriber import VideoTranscriber
-from core.translator import GeminiTranslator
+from core.translators import make_translator, source_language
 from core.subtitles import TranslationContext, load_file, parse, shift, to_srt, translate_cues, wrap_lines
 from core.muxer import VideoMuxer
 from core.provenance import substudio_track_title
@@ -63,7 +63,7 @@ class PipelineOrchestrator:
     def __init__(self):
         self.scanner = VideoScanner(base_path=MEDIA_ROOT)
         self.transcriber = VideoTranscriber(model_size="medium")
-        self.translator = GeminiTranslator()
+        self.translator = make_translator()
         self.muxer = VideoMuxer()
         
         self.active_jobs: Set[str] = set()
@@ -166,23 +166,29 @@ class PipelineOrchestrator:
                 cues = shift(cues, video.syncOffset)
 
             # STEP 4: TRANSLATION — a language that cannot be fully translated fails the video (TranslationFailed)
-            translation_ctx = TranslationContext(title=video.name, notes=context, source_is_asr=is_whisper)
+            translation_ctx = TranslationContext(title=video.name, notes=context, source_is_asr=is_whisper,
+                                                 source_lang=source_language(cues))
             translated_map = {}
-            for lang_code in video.out:
-                job.raise_if_aborted()
-                event_manager.emit(fid, "processing", 50, f"{p} Translating to {lang_code}...")
-                logger.info(f"Translating {len(cues)} cues into {lang_code.upper()} with {self.translator.name}...")
+            try:
+                for lang_code in video.out:
+                    job.raise_if_aborted()
+                    event_manager.emit(fid, "processing", 50, f"{p} Translating to {lang_code}...")
+                    logger.info(f"Translating {len(cues)} cues from {translation_ctx.source_lang or '?'} into "
+                                f"{lang_code.upper()} with {self.translator.name}...")
 
-                def on_batch(done: int, total_cues: int, lang=lang_code):
-                    event_manager.emit(fid, "translating", 40 + int(done / total_cues * 40),
-                                       f"{p} Step 4/5: Translating {lang.upper()} ({done}/{total_cues} lines)")
+                    def on_batch(done: int, total_cues: int, lang=lang_code):
+                        event_manager.emit(fid, "translating", 40 + int(done / total_cues * 40),
+                                           f"{p} Step 4/5: Translating {lang.upper()} ({done}/{total_cues} lines)")
 
-                translated = await asyncio.to_thread(
-                    translate_cues, cues, lang_code, translation_ctx, self.translator,
-                    on_batch=on_batch, check_abort=job.raise_if_aborted,
-                )
-                translated = wrap_lines(translated, 50)
-                translated_map[lang_code] = translated
+                    translated = await asyncio.to_thread(
+                        translate_cues, cues, lang_code, translation_ctx, self.translator,
+                        on_batch=on_batch, check_abort=job.raise_if_aborted,
+                    )
+                    translated = wrap_lines(translated, 50)
+                    translated_map[lang_code] = translated
+            finally:
+                # One heavy model at a time (D-0001): free the translation model before the next transcription.
+                await asyncio.to_thread(self.translator.unload)
 
             # Written only once EVERY language succeeded: a video that ends in error leaves no partial output.
             if opts.generateSRT:

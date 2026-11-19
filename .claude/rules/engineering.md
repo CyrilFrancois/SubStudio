@@ -151,6 +151,13 @@ and lost on restart.
   `Translator` contract (`translate([{id, text}], target, context) -> [{id, text}]`, no timing ever
   sent) and `translate_cues`, which batches, rejects an answer whose id set differs (retry once,
   then split down to one cue), re-attaches timings by id, and raises `TranslationFailed`.
+- `backend/core/translators/` — `make_translator()` picks the backend from `TRANSLATOR` (`local` default,
+  `gemini` opt-in); `source_language(cues)` detects the source once per file. `llamacpp.py` —
+  `LlamaCppTranslator`, the default: TranslateGemma 4B Q4_K_M on a native llama.cpp server, 10 cues per
+  call as `id|text` lines, prompt rendered from the model's own chat template (`/props`), a reply cut at
+  the token limit raises `BatchMismatch`. `llama_server.py` starts the server on the first batch
+  (`--threads 4`, all layers on the iGPU) and `unload()` stops it after each video's translation, so
+  Whisper and the LLM are never loaded together (D-0001). Choice and numbers: `doc/decisions/D-0003`.
 - `backend/core/translator.py` — `GeminiTranslator`, an optional backend of that contract: Gemini
   REST (`httpx`, no SDK), `thinkingLevel: low`, JSON output with a response schema, 30 cues per
   call, temperature 0.2. `get_context_profile()` builds a story bible from the filename.
@@ -193,7 +200,9 @@ boolean, not a mode.
 
 ### Configuration
 
-`.env` (gitignored; template in `.env.example`): `GEMINI_API_KEY`, optional `GEMINI_MODEL`
+`.env` (gitignored; template in `.env.example`): `TRANSLATOR` (`local` default), `LLAMA_SERVER_BIN`,
+`LLAMA_MODEL_PATH`, `LLAMA_GPU_LAYERS`, `LLAMA_PORT` (defaults under `%LOCALAPPDATA%\SubStudio\`);
+only with `TRANSLATOR=gemini`: `GEMINI_API_KEY`, optional `GEMINI_MODEL`
 (default `gemini-3.8-flash`; must be a 3.x model because the request sends `thinkingLevel`),
 `NEXT_PUBLIC_MEDIA_PATH`, `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_LANGUAGES`, `WHISPER_MODEL`.
 Whisper models cache in the `whisper_model_cache` volume. Key at
