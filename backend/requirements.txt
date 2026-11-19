@@ -23,7 +23,6 @@ ffmpeg-python
 # Subtitle ladder (core/acquire): free providers, then re-timing to the audio
 subliminal==2.8.0
 ffsubsync==0.5.1
-pysubs2
 
 # System & Utilities
 python-dotenv

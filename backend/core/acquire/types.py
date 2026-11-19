@@ -20,7 +20,7 @@ class ExistingSub:
     kind: str                # "embedded" or "sidecar"
     ref: str                 # sidecar path, or the embedded stream index as text
     text: bool = True        # False for PGS/VobSub: watchable, but not translatable without OCR
-    marked: bool = False     # made by the current SubStudio (core/provenance.is_substudio_track): always considered
+    marked: bool = False     # made by the current SubStudio (core/provenance.is_substudio_track): evaluated first
 
 
 @dataclass(frozen=True)
