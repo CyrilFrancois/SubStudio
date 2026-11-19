@@ -51,9 +51,51 @@ class MemSampler(threading.Thread):
             self.peak_drop = max(self.peak_drop, self.base_avail - psutil.virtual_memory().available)
 
 
-def load_set(limit):
-    rows = [json.loads(l) for l in (HERE / "opensubs_en_fr_150.jsonl").read_text(encoding="utf-8").splitlines()]
+SETS = {"150": "opensubs_en_fr_150.jsonl", "names": "opensubs_en_fr_names.jsonl"}
+
+
+def load_set(name, limit):
+    rows = [json.loads(l) for l in (HERE / SETS[name]).read_text(encoding="utf-8").splitlines()]
     return rows[:limit]
+
+
+# ---------- glossary (what a context lookup gives: TVmaze's characters, the recurring proper nouns) ----------
+
+def set_glossary(rows):
+    """Stands in for the looked-up glossary: every name the human references kept, over the whole set."""
+    sys.path.insert(0, str(HERE))
+    from names_score import kept_names
+    return sorted({n for r in rows for n in kept_names(r["en"], r["fr"])}, key=len, reverse=True)
+
+
+def _word(w):
+    return re.compile(rf"(?<!\w){re.escape(w)}(?!\w)")
+
+
+def names_in(text, glossary):
+    return [n for n in glossary if _word(n).search(text)]
+
+
+TOKEN = {"x": "X{}", "nm": "NAME{}"}
+
+
+def swap_out(text, names, style):
+    """Each glossary name in the text becomes a numbered token the model has no reason to translate."""
+    for k, n in enumerate(names, start=1):
+        text = _word(n).sub(TOKEN[style].format(k), text)
+    return text
+
+
+def swap_back(text, names, style):
+    """Restore every token; returns the text and how many tokens the model lost."""
+    lost = 0
+    for k in range(len(names), 0, -1):  # X12 before X1
+        tok = _word(TOKEN[style].format(k))
+        if tok.search(text):
+            text = tok.sub(lambda _m: names[k - 1], text)
+        else:
+            lost += 1
+    return text, lost
 
 
 # ---------- llama.cpp ----------
@@ -89,7 +131,7 @@ def gemma_prompt(text, src, tgt):
     return gemma_prompt.tpl.render(messages=msgs, add_generation_prompt=True, bos_token="<bos>")
 
 
-def build_request(family, text, batch):
+def build_request(family, text, batch, keep=()):
     """Return (endpoint, json body) for one request. `batch` tells the model the text is numbered lines."""
     limit = 64 + len(text)  # ~ chars: French runs ~1.2x English tokens; a char budget is a safe ceiling
     common = {"temperature": 0, "cache_prompt": True}
@@ -108,12 +150,14 @@ def build_request(family, text, batch):
     if batch:
         sys_p += (" The input is numbered lines `N|text`. Answer with exactly the same numbers, one line each, "
                   "`N|translation`, nothing else.")
+    if keep:
+        sys_p += " Keep these names exactly as written, untranslated: " + ", ".join(keep) + "."
     return "/v1/chat/completions", {**common, "messages": [{"role": "system", "content": sys_p},
                                                            {"role": "user", "content": text}]}
 
 
-def ask(family, text, batch):
-    path, body = build_request(family, text, batch)
+def ask(family, text, batch, keep=()):
+    path, body = build_request(family, text, batch, keep)
     r = httpx.post(f"http://127.0.0.1:{PORT}{path}", json=body, timeout=600)
     r.raise_for_status()
     j = r.json()
@@ -122,15 +166,21 @@ def ask(family, text, batch):
     return out.strip(), t.get("predicted_n", 0), t.get("predicted_ms", 0), t.get("prompt_n", 0), t.get("prompt_ms", 0)
 
 
-def run_llama(family, rows, mode, bsize):
-    hyp, bad_batches, tok = {}, 0, {"pn": 0, "pms": 0, "gn": 0, "gms": 0}
+def run_llama(family, rows, mode, bsize, glossary=(), gmode="none", style="x"):
+    hyp, bad_batches, tok = {}, 0, {"pn": 0, "pms": 0, "gn": 0, "gms": 0, "lost_tokens": 0, "tokens": 0}
     chunks = [rows[i:i + bsize] for i in range(0, len(rows), bsize)] if mode == "batch" else [[r] for r in rows]
     for ch in chunks:
         if mode == "cue":
             text = ch[0]["en"]
         else:
             text = "\n".join(f"{r['id']}|{r['en'].replace(chr(10), ' ')}" for r in ch)
-        out, gn, gms, pn, pms = ask(family, text, mode == "batch")
+        names = names_in(text, glossary) if gmode != "none" else []
+        if gmode == "swap":
+            text = swap_out(text, names, style)
+        out, gn, gms, pn, pms = ask(family, text, mode == "batch", names if gmode == "prompt" else ())
+        if gmode == "swap":
+            out, lost = swap_back(out, names, style)
+            tok["lost_tokens"] += lost; tok["tokens"] += len(names)
         tok["gn"] += gn; tok["gms"] += gms; tok["pn"] += pn; tok["pms"] += pms
         if mode == "cue":
             hyp[ch[0]["id"]] = out
@@ -175,9 +225,14 @@ def main():
     ap.add_argument("--ngl", type=int, default=0, help="layers on the iGPU (Vulkan build only); 0 = CPU")
     ap.add_argument("--build", choices=["vulkan", "cpu"], default="vulkan")
     ap.add_argument("--limit", type=int, default=150)
+    ap.add_argument("--set", choices=SETS, default="150")
+    ap.add_argument("--glossary", choices=["none", "prompt", "swap"], default="none",
+                    help="prompt: names listed in the system prompt (chat models); swap: names replaced by tokens")
+    ap.add_argument("--token", choices=TOKEN, default="x", help="placeholder style for --glossary swap")
     a = ap.parse_args()
     (HERE / "out").mkdir(exist_ok=True)
-    rows = load_set(a.limit)
+    rows = load_set(a.set, a.limit)
+    glossary = set_glossary(rows)
     family, _ = CANDIDATES[a.model]
     # Other threads share this PC: record how busy it was, so a slow run is read in context.
     host = {"host_cpu_pct_before": psutil.cpu_percent(interval=2),
@@ -204,7 +259,7 @@ def main():
         sampler = MemSampler(server.pid); sampler.start()
         try:
             t0 = time.time()
-            hyp, bad, nb, tok = run_llama(family, rows, a.mode, a.batch)
+            hyp, bad, nb, tok = run_llama(family, rows, a.mode, a.batch, glossary, a.glossary, a.token)
         finally:
             sampler.stop.set(); server.terminate(); server.wait(30)
     wall = time.time() - t0
@@ -221,11 +276,14 @@ def main():
         "avg_cpus_busy": round(sum(sampler.cpu) / len(sampler.cpu), 2) if sampler.cpu else None,
         "chrf": round(sacrebleu.corpus_chrf(hyps, [refs]).score, 1),
         "empty": sum(1 for h in hyps if not h), "bad_batches": bad, "batches": nb,
+        "set": a.set, "glossary": a.glossary, "token": a.token if a.glossary == "swap" else None,
+        "swap_lost": tok.get("lost_tokens"), "swap_tokens": tok.get("tokens"),
         "at": time.strftime("%Y-%m-%dT%H:%M:%S"), **host,
     }
     with open(HERE / "results.jsonl", "a", encoding="utf-8") as f:
         f.write(json.dumps(res) + "\n")
-    tag = f"{a.model}-{a.mode}-ngl{a.ngl}"
+    tag = f"{a.model}-{a.mode}-ngl{a.ngl}" + ("" if a.set == "150" else f"-{a.set}") \
+        + ("" if a.glossary == "none" else f"-{a.glossary}") + (f"-{a.token}" if a.glossary == "swap" else "")
     (HERE / "out" / f"{tag}.jsonl").write_text(
         "".join(json.dumps({"id": r["id"], "en": r["en"], "ref": r["fr"], "hyp": h}, ensure_ascii=False) + "\n"
                 for r, h in zip(rows, hyps)), encoding="utf-8")
