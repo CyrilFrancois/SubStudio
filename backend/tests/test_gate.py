@@ -87,7 +87,7 @@ def test_ass_track_is_measured_on_its_text_not_its_markup(tmp_path):
     # characters nor break a cue. Built with chr() so no escape sequence can be mangled on the way to disk.
     from core.subtitles import load_file
     bs, nl = chr(92), chr(10)
-    cues, speech = _episode(minutes=3)
+    cues, speech = _episode(minutes=10)  # ~100 speech spans: enough to measure the offset (sync.MIN_SPEECH_SPANS)
     events = nl.join(
         f"Dialogue: 0,{_ass_time(c.start_ms)},{_ass_time(c.end_ms)},Default,,0,0,0,,"
         + "{" + bs + "an8}{" + bs + "i1}" + c.text.replace(" ", bs + "N", 1) + "{" + bs + "i0}" for c in cues)
