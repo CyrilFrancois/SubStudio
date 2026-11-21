@@ -163,3 +163,8 @@ information, not mess:** never `git checkout --`, stash, delete or commit a file
   committing, and `git show --stat HEAD` after.
 - Guard every `cd`: `cd "$W" || exit 1` — a failed `cd` followed by `;` runs git in the wrong place.
 - Uncommitted edits to `CLAUDE.md` reach every session opened in this checkout.
+- **A thread that needs its own checkout makes a worktree inside this repo:**
+  `git worktree add .claude/worktrees/<name> -b <branch>` (gitignored; workspace CLAUDE.md §0, enforced by
+  `hook_worktree_guard.py`), never `../SubStudio-sessions/`. Once its branch is merged, `git worktree remove` it in
+  the same pass; bench outputs other work needs go to main's ignored `bench/clips/` first. (2026-11-21: 15 stale
+  worktrees removed, 14 of them merged.)

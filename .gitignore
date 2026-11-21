@@ -33,3 +33,6 @@ bench/gate_work/
 
 # UI API state (settings.json)
 backend/state/
+
+# A thread's git worktrees (workspace CLAUDE.md §0: never beside the project at the workspace root)
+.claude/worktrees/
