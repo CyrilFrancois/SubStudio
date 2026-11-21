@@ -38,7 +38,7 @@ in `SubStudio/CLAUDE.md` or `SubStudio/.claude/rules/*.md`. Map: `doc/harness-mi
 4. **Implement** — one pass, no partial implementations
 5. **Verify** — the commands in §3, actually run, plus the edge cases that apply
 6. **One-line summary** — what changed and what's next; don't restate the diff
-7. **Update the workspace `DONELIST.MD`** — mandatory: a `## [YYYY-MM-DD] [SubStudio] Title` entry, prepended, with its status line (workspace `CLAUDE.md` §6)
+7. **Update the workspace `DONELIST.MD`** — mandatory: a `## [YYYY-MM-DD] [SubStudio] Title` entry with its status line (workspace `CLAUDE.md` §6), added ONLY through `python3 -I "$WS_TOOLS/log_entry.py" add "$WS_LOGS/DONELIST.MD" --file <entry.md>`, never by hand
 8. **Commit and push**
 9. **Think ahead** — append findings below the marker of the workspace `TODOLIST.MD`, under `### [SubStudio]`
 

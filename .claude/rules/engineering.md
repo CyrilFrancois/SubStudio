@@ -14,7 +14,7 @@ in `SubStudio/CLAUDE.md` or `SubStudio/.claude/rules/*.md`. Map: `doc/harness-mi
 ### The commands that actually exist here
 
 ```bash
-# Memory-heavy jobs share ONE lease (Steward, 2026-11-19, workspace doc/04): a full pytest run (x3), `next build`,
+# Memory-heavy jobs share ONE lease (Steward, 2026-11-19, `$WS_DOC/04_thread_roles.md`): a full pytest run (x3), `next build`,
 # and every model run go through `threads.py with heavy`; --min-free-mb waits for that much free RAM, else exits 3
 # without running. T="python3 -I C:/Users/cyril/Documents/Workspace/doc/_tools/threads.py"
 #   full suite x3 : $T with heavy --min-free-mb 1500 -- .venv/Scripts/python.exe -m pytest -q
